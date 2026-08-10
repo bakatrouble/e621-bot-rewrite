@@ -1,0 +1,44 @@
+from dataclasses import dataclass
+from typing import Iterable
+
+from . import storage
+
+
+@dataclass
+class QueryAtom:
+    tag: str
+    negative: bool
+
+    @classmethod
+    def from_string(cls, atom: str):
+        negative = atom.startswith('-')
+        return QueryAtom(tag=atom.lstrip('-'), negative=negative)
+
+    def __str__(self):
+        return f'{'-' if self.negative else ''}{self.tag}'
+
+
+class Query:
+    def __init__(self, query: str):
+        self.atoms = [QueryAtom.from_string(atom) for atom in query.split()]
+
+    def __str__(self):
+        return ' '.join(str(atom) for atom in self.atoms)
+
+    def mentioned_tags(self):
+        return set(atom.tag for atom in self.atoms if not atom.negative)
+
+    @classmethod
+    async def get_queries(cls) -> list['Query']:
+        return [Query(q) for q in await storage.get_subs()]
+
+    def check(self, tags: Iterable[str]):
+        tags = set(tags)
+        result = True
+        for atom in self.atoms:
+            if atom.negative and atom.tag in tags:
+                return False
+            if atom.tag not in tags:
+                result = False
+                break
+        return result

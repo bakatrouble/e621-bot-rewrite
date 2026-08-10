@@ -1,0 +1,7 @@
+!.gitkeep
+/cache/*
+*.py[oc]
+__pycache__
+/.idea
+/.venv
+/config.yaml
