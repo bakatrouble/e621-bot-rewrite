@@ -36,9 +36,11 @@ class Query:
         tags = set(tags)
         result = True
         for atom in self.atoms:
-            if atom.negative and atom.tag in tags:
-                return False
-            if atom.tag not in tags:
-                result = False
-                break
+            if atom.negative:
+                if atom.tag in tags:
+                    return False
+            else:
+                if atom.tag not in tags:
+                    result = False
+                    break
         return result
