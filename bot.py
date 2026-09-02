@@ -108,7 +108,7 @@ class TelegramBot:
             raise RuntimeError(f'Destination {callback_data.destination} is not supported')
 
         async with AsyncClient() as client:
-            r = await client.post(f'{api_base}/internalDelete', json={'upload_id': callback_data.upload_id})
+            r = await client.delete(f'{api_base}/internalDelete', json={'upload_id': callback_data.upload_id})
             r = r.json()
         if r['status'] == 'ok':
             await query.answer('Unsent')
