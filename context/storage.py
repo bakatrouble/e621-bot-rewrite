@@ -1,12 +1,11 @@
 import logging
 from dataclasses import dataclass
 
-from opentelemetry import trace
 from redis import RedisError
 from redis.asyncio import Redis
 
 
-# tracer = trace.get_tracer('subscriber.storage')
+__all__ = ['Storage', 'StorageDump', 'migrations']
 
 
 @dataclass
@@ -16,60 +15,63 @@ class StorageDump:
     last_post_version: int
 
 
+class StorageImpl:
+    def __init__(self, redis: Redis, logger: logging.Logger, name: str):
+        self._redis = redis
+        self._name = name
+        self.lock = redis.lock(f'subscriber:{self._name}:lock')
+        self._logger = logger
+
+    async def get_subs(self) -> list[str]:
+        return [str(sub) for sub in sorted(await self._redis.smembers(f'subscriber:{self._name}:subs'))]
+
+    async def add_sub(self, sub: str):
+        await self._redis.sadd(f'subscriber:{self._name}:subs', sub)
+
+    async def remove_sub(self, sub: str):
+        await self._redis.srem(f'subscriber:{self._name}:subs', sub)
+
+    async def get_post_sent(self, post_ids: list[int]) -> dict[int, bool]:
+        if not post_ids:
+            return {}
+        return {post_id: bool(ismember)
+                for post_id, ismember
+                in zip(post_ids, await self._redis.smismember(f'subscriber:{self._name}:sent', post_ids))}
+
+    async def set_post_sent(self, post_id: int):
+        await self._redis.sadd(f'subscriber:{self._name}:sent', post_id)
+
+    async def get_last_post_version(self) -> int:
+        version = int(await self._redis.get(f'subscriber:{self._name}:last_post_version') or '0')
+        return version
+
+    async def set_last_post_version(self, post_version: int):
+        await self._redis.set(f'subscriber:{self._name}:last_post_version', post_version)
+
+    async def get_scanned(self, key: str) -> bool:
+        return await self._redis.hexists(f'subscriber:{self._name}:scanned', key)
+
+    async def set_scanned(self, key: str):
+        await self._redis.hset(f'subscriber:{self._name}:scanned', key, 1)
+
+    async def dump(self) -> StorageDump:
+        subs = await self.get_subs()
+        sent = list(map(int, await self._redis.smembers(f'subscriber:{self._name}:sent')))
+        last_post_version = await self.get_last_post_version()
+
+        return StorageDump(subs, sent, last_post_version)
+
+
 class Storage:
     def __init__(self, redis_url: str):
         self._redis = Redis.from_url(redis_url, decode_responses=True)
         self.lock = self._redis.lock('subscriber:lock')
         self._logger = logging.getLogger('storage')
 
-    async def get_subs(self) -> list[str]:
-        # with tracer.start_as_current_span('get_subs'):
-        return list(sorted(await self._redis.smembers('subscriber:e621:subs')))
-
-    async def add_sub(self, sub: str):
-        # with tracer.start_as_current_span('add_sub') as span:
-        #     span.set_attribute('sub', sub)
-        await self._redis.sadd('subscriber:e621:subs', sub)
-
-    async def remove_sub(self, sub: str):
-        # with tracer.start_as_current_span('remove_sub') as span:
-        #     span.set_attribute('sub', sub)
-        await self._redis.srem('subscriber:e621:subs', sub)
-
-    async def get_post_sent(self, post_ids: list[int]) -> dict[int, bool]:
-        # with tracer.start_as_current_span('get_post_sent') as span:
-        #     span.set_attribute('post_ids', post_ids)
-        if not post_ids:
-            return {}
-        return {post_id: bool(ismember)
-                for post_id, ismember
-                in zip(post_ids, await self._redis.smismember('subscriber:e621:sent', post_ids))}
-
-    async def set_post_sent(self, post_id: int):
-        # with tracer.start_as_current_span('set_post_sent') as span:
-        #     span.set_attribute('post_id', post_id)
-        await self._redis.sadd('subscriber:e621:sent', post_id)
-
-    async def get_last_post_version(self) -> int:
-        # with tracer.start_as_current_span('get_last_post_version') as span:
-        version = int(await self._redis.get('subscriber:e621:last_post_version') or '0')
-        #     span.set_attribute('last_version', version)
-        return version
-
-    async def set_last_post_version(self, post_version: int):
-        # with tracer.start_as_current_span('set_last_post_version') as span:
-        #     span.set_attribute('post_version', post_version)
-        await self._redis.set('subscriber:e621:last_post_version', post_version)
-
-    async def dump(self) -> StorageDump:
-        subs = await self.get_subs()
-        sent = list(map(int, await self._redis.smembers('subscriber:e621:sent')))
-        last_post_version = await self.get_last_post_version()
-
-        return StorageDump(subs, sent, last_post_version)
+        self.e621 = StorageImpl(self._redis, self._logger, 'e621')
+        self.gelbooru = StorageImpl(self._redis, self._logger, 'gelbooru')
 
     async def migrate(self):
-        # with tracer.start_as_current_span('migrate'):
         current_version = int(await self._redis.get('subscriber:version') or '0')
         for migration in migrations[current_version:]:
             self._logger.info(f'Running migration {migration.__name__}')

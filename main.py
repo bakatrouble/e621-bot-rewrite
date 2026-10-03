@@ -3,51 +3,13 @@
 import asyncio
 
 import asyncclick as click
-# from opentelemetry.instrumentation.asyncio import AsyncioInstrumentor
-# from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
-# from opentelemetry.instrumentation.logging import LoggingInstrumentor
-# from opentelemetry.instrumentation.redis import RedisInstrumentor
-# from opentelemetry.sdk.metrics import MeterProvider
 
 import api
 from bot import telegram_bot
-from context import storage, config
+from context import storage
 from context.query import Query
 from utils.cache import cache_cleaner
 from websites import e621
-
-
-# def setup_otel():
-#     from opentelemetry import trace, _logs as logs, metrics
-#     from opentelemetry.exporter.otlp.proto.grpc._log_exporter import OTLPLogExporter
-#     from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
-#     from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
-#     from opentelemetry.sdk._logs import LoggerProvider
-#     from opentelemetry.sdk._logs._internal.export import BatchLogRecordProcessor
-#     from opentelemetry.sdk.resources import Resource
-#     from opentelemetry.sdk.trace import TracerProvider
-#     from opentelemetry.sdk.trace.export import BatchSpanProcessor
-#     from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
-#
-#     # --traces_exporter otlp --metrics_exporter otlp --logs_exporter otlp --service_name subscriber
-#     resource = Resource.create({
-#         'service.name': 'subscriber',
-#     })
-#     trace.set_tracer_provider(TracerProvider(resource=resource))
-#     logs.set_logger_provider(LoggerProvider(resource=resource))
-#
-#     reader = PeriodicExportingMetricReader(OTLPMetricExporter())
-#     metrics.set_meter_provider(MeterProvider(resource=resource, metric_readers=[reader]))
-#
-#     otlp_span_exporter = OTLPSpanExporter()
-#     trace.get_tracer_provider().add_span_processor(BatchSpanProcessor(otlp_span_exporter))
-#
-#     otlp_log_exporter = OTLPLogExporter()
-#     logs.get_logger_provider().add_log_record_processor(BatchLogRecordProcessor(otlp_log_exporter))
-#
-#     HTTPXClientInstrumentor().instrument()
-#     AsyncioInstrumentor().instrument()
-#     LoggingInstrumentor().instrument()
 
 
 @click.group()

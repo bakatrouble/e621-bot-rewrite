@@ -7,7 +7,7 @@ from aiogram.filters.callback_data import CallbackData
 from aiogram.types import CallbackQuery, InaccessibleMessage
 from httpx import AsyncClient
 
-from context import bot, config, Storage
+from context import bot, config
 from utils.cache import is_cached, cache_file
 
 

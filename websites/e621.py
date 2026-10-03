@@ -5,8 +5,6 @@ from dataclasses import dataclass
 from typing import Optional, Iterable
 
 import httpx
-# from opentelemetry import trace
-# from opentelemetry.trace import Status, Span, StatusCode
 from pydantic import BaseModel
 
 from context import storage, config, tag_to_hashtag, bot
@@ -15,7 +13,6 @@ from utils.media import resize_image, convert_to_mp4
 from utils.telegram import send_as_photo, send_as_video, send_as_document
 
 logger = logging.getLogger('e621')
-# tracer = trace.get_tracer('subscriber.e621')
 
 
 class E621PostFile(BaseModel):
@@ -60,7 +57,6 @@ class E621Post(BaseModel):
         from websites import e621
 
         if not self.file.url:
-            # span.set_status(StatusCode.ERROR, 'empty file url')
             logger.warning(f'file url is missing for post #{self.id}')
             return
 
@@ -117,8 +113,6 @@ class E621PostVersion(BaseModel):
         matched_queries = []
         current_tags = set(self.tags.split())
         prev_tags = (current_tags | set(self.removed_tags)) - set(self.added_tags)
-        # logging.info(f'{prev_tags=}')
-        # logging.info(f'{current_tags=}')
         for query in queries:
             if query.check(current_tags) and not query.check(prev_tags):
                 matched_queries.append(query)
@@ -139,7 +133,6 @@ class E621MatchedPV:
     async def send_post(self):
         from websites import e621
         post = await e621.get_post(self.post_version.post_id)
-        # span.set_attribute('post')
         await post.send_post(self.matched_queries)
 
 
@@ -199,13 +192,11 @@ class E621:
         return r.content
 
     async def process_new_posts(self):
-        # span.add_event('start')
         logger.info('processing new posts')
-        async with storage.lock:
-            # span.add_event('lock_acquired')
+        async with storage.e621.lock:
             logger.info('lock acquired')
-            queries = await Query.get_queries()
-            last_post_version = await storage.get_last_post_version()
+            queries = Query.get_queries(await storage.e621.get_subs())
+            last_post_version = await storage.e621.get_last_post_version()
             page_size = 320
             pvs_to_post: list[E621MatchedPV] = []
             for i in range(10):
@@ -219,51 +210,39 @@ class E621:
                     if matched_queries := post_version.check_queries(queries):
                         pvs_to_post.append(E621MatchedPV(matched_queries, post_version))
 
-                # span.add_event('page_loaded', {'page': i})
                 logger.info(f'page {i} loaded, count={len(page)}, matched={len(pvs_to_post)}')
 
                 if len(page) < page_size:
                     break
 
-            # span.set_attribute('matched_posts', len(pvs_to_post))
             pvs_to_post.sort(key=lambda plan: plan.post_version.id)
-            sent_flags = await storage.get_post_sent([plan.post_version.post_id for plan in pvs_to_post])
+            sent_flags = await storage.e621.get_post_sent([plan.post_version.post_id for plan in pvs_to_post])
             logging.info(f'sent_flags: {sent_flags}')
             pvs_to_post = [plan for plan in pvs_to_post if not sent_flags[plan.post_version.post_id]]
             logger.info(f'unsent posts: {len(pvs_to_post)}')
-            # span.set_attribute('unsent_posts', len(pvs_to_post))
 
             if not pvs_to_post:
-                # span.add_event('no_matched_posts')
                 logger.info(f'no unsent posts')
-                await storage.set_last_post_version(last_post_version)
+                await storage.e621.set_last_post_version(last_post_version)
                 return
 
             for plan in pvs_to_post:
-                # with tracer.start_as_current_span('process_new_posts.post_version') as pv_span:
-                #     pv_span.set_attribute('id', plan.post_version.id)
-                #     pv_span.set_attribute('post_id', plan.post_version.post_id)
-                #     pv_span.set_attribute('post_version', plan.post_version.model_dump())
                 try:
                     if not sent_flags[plan.post_version.post_id]:
                         await plan.send_post()
-                        # pv_span.set_attribute('process_new_posts.post_version.sent', True)
-                        await storage.set_post_sent(plan.post_version.post_id)
+                        await storage.e621.set_post_sent(plan.post_version.post_id)
                         sent_flags[plan.post_version.post_id] = True
-                    await storage.set_last_post_version(plan.post_version.id)
+                    await storage.e621.set_last_post_version(plan.post_version.id)
                 except Exception as e:
                     logger.error(traceback.format_exception(e))
-                    # pv_span.record_exception(e)
                 finally:
                     await asyncio.sleep(3)
 
     async def worker(self):
         while True:
-            # with tracer.start_as_current_span('process_new_posts') as span:
             try:
                 await self.process_new_posts()
             except Exception as e:
-                # span.record_exception(e)
                 logger.error(traceback.format_exception(e))
             finally:
                 await asyncio.sleep(config.interval.total_seconds())

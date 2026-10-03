@@ -29,8 +29,8 @@ class Query:
         return set(atom.tag for atom in self.atoms if not atom.negative)
 
     @classmethod
-    async def get_queries(cls) -> list['Query']:
-        return [Query(q) for q in await storage.get_subs()]
+    def get_queries(cls, subs: list[str]) -> list['Query']:
+        return [Query(q) for q in subs]
 
     def check(self, tags: Iterable[str]):
         tags = set(tags)

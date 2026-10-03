@@ -18,6 +18,11 @@ class APIConfig(BaseModel):
     keys: list[str]
 
 
+class GelbooruConfig(BaseModel):
+    api_key: str
+    user_id: str
+
+
 class Config(BaseModel):
     bot_token: str
     chat_id: int
@@ -27,6 +32,7 @@ class Config(BaseModel):
     cache_dir: Path = Path('cache')
     destinations: DestinationsConfig | None = None
     production: bool | None = False
+    gelbooru: GelbooruConfig | None = None
 
     @classmethod
     def load(cls, path: str) -> 'Config':

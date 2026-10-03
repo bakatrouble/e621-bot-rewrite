@@ -4,9 +4,10 @@ from functools import wraps
 import hypercorn.asyncio
 from hypercorn import Config
 from sanic import Sanic, Request, json
+from sanic.exceptions import BadURL
 from sanic_ext import Extend
 
-from context import config, storage
+from context import config, storage as storage_root
 
 
 app = Sanic('subscriber')
@@ -31,9 +32,21 @@ def protected():
     return decorator
 
 
+def get_storage(request: Request):
+    website = request.args.get('website', 'e621')
+    match website:
+        case 'e621':
+            return storage_root.e621
+        case 'gelbooru':
+            return storage_root.gelbooru
+        case _:
+            raise BadURL('invalid website')
+
+
 @app.get('/api/subscriptions')
 @protected()
 async def subscriptions_get(request: Request):
+    storage = get_storage(request)
     subs = await storage.get_subs()
     return json({'status': 'success', 'subscriptions': subs})
 
@@ -41,6 +54,7 @@ async def subscriptions_get(request: Request):
 @app.post('/api/subscriptions')
 @protected()
 async def subscriptions_post(request: Request):
+    storage = get_storage(request)
     subs: list[str] = request.json.get('subs', [])
     if not subs:
         return json({'status': 'error', 'message': 'No subs provided'}, 400)
@@ -62,6 +76,7 @@ async def subscriptions_post(request: Request):
 @app.delete('/api/subscriptions')
 @protected()
 async def subscriptions_delete(request: Request):
+    storage = get_storage(request)
     subs: list[str] = request.json.get('subs', [])
 
     existing_subs = set(await storage.get_subs())
