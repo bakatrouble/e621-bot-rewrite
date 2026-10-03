@@ -6,10 +6,10 @@ import asyncclick as click
 
 import api
 from bot import telegram_bot
-from context import storage
+from context import storage, config
 from context.query import Query
 from utils.cache import cache_cleaner
-from websites import e621
+from websites import e621, gelbooru
 
 
 @click.group()
@@ -27,6 +27,8 @@ async def start_telegram_bot():
 async def start_worker():
     async with asyncio.TaskGroup() as tg:
         tg.create_task(e621.worker())
+        if config.gelbooru:
+            tg.create_task(gelbooru.worker())
         tg.create_task(cache_cleaner())
 
 
