@@ -26,7 +26,7 @@ class GelbooruPost(BaseModel):
     md5: str
     directory: str
     image: str
-    rating: Literal['general'] | Literal['sensitive'] | Literal['explicit']
+    rating: str
     change: int
     owner: str
     creator_id: int
