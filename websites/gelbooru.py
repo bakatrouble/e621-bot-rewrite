@@ -179,7 +179,7 @@ class Gelbooru:
             posts_to_post: list[GelbooruPost] = []
             for sub in await storage.gelbooru.get_subs():
                 new_posts = []
-                scanned = await storage.gelbooru.get_scanned()
+                scanned = await storage.gelbooru.get_scanned(sub)
                 logging.info(f'fetching posts for `{sub}`')
                 for page_num in count():
                     page = await self.get_posts(tags=sub, page=page_num, limit=page_size)
