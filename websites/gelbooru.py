@@ -156,6 +156,8 @@ class Gelbooru:
             params = {
                 'page': 'dapi',
                 's': 'tag',
+                'q': 'index',
+                'json': 1,
                 'names': ' '.join(tags),
                 'pid': page_num,
                 'limit': 100,
