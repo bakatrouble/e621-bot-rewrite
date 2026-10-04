@@ -21,6 +21,7 @@ class APIConfig(BaseModel):
 class GelbooruConfig(BaseModel):
     api_key: str
     user_id: str
+    interval: timedelta
 
 
 class Config(BaseModel):
