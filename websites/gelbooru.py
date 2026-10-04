@@ -84,7 +84,7 @@ class GelbooruPost(BaseModel):
         caption = '\n'.join(caption_lines)
         logger.info(f'caption: {caption}')
 
-        media_bytes = gelbooru.download_media(self.file_url)
+        media_bytes = await gelbooru.download_media(self.file_url)
         ext = self.file_url.split('.')[-1]
         if ext in ('jpg', 'png', 'webp'):
             media_bytes = await resize_image(media_bytes)
