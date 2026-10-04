@@ -171,7 +171,7 @@ class Gelbooru:
         return fetched_tags
 
     async def download_media(self, url: str) -> bytes:
-        r = await self._client.get(url)
+        r = await self._client.get(url, headers={'referer': 'https://gelbooru.com/'})
         return r.content
 
     async def process_new_posts(self):
