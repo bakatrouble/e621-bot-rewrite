@@ -231,4 +231,4 @@ class Gelbooru:
             except Exception as e:
                 logger.error(traceback.format_exception(e))
             finally:
-                await asyncio.sleep(config.interval.total_seconds())
+                await asyncio.sleep(config.gelbooru.interval.total_seconds())
