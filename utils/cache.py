@@ -5,6 +5,7 @@ import traceback
 from pathlib import Path
 
 from context import config
+from utils.tracing import get_tracer, traced
 
 
 logger = logging.getLogger('cache')
@@ -25,8 +26,10 @@ def is_cached(filename: str) -> tuple[Path, bool]:
 
 
 async def cache_cleaner():
+    tracer = get_tracer('utils.cache')
     while True:
-        logger.info(f'running cache cleaner')
+        with tracer.start_as_current_span('cache.cleaner_tick'):
+            logger.info(f'running cache cleaner')
         try:
             removed = 0
             for item in config.cache_dir.iterdir():

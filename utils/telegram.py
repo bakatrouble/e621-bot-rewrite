@@ -4,6 +4,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from bot import SendCallback, UnsendCallback
 from context import config
+from utils.tracing import traced
 
 
 def build_keyboard(filename: str, nsfw_upload_id: str | None = None, sfw_upload_id: str | None = None):
@@ -27,6 +28,7 @@ def build_keyboard(filename: str, nsfw_upload_id: str | None = None, sfw_upload_
         .as_markup()
 
 
+@traced('telegram.send_as_photo')
 async def send_as_photo(bot: Bot, media: bytes, caption: str, post_id: str):
     cached_name = f'{post_id}.jpg'
     kb = build_keyboard(cached_name)
@@ -37,6 +39,7 @@ async def send_as_photo(bot: Bot, media: bytes, caption: str, post_id: str):
                          parse_mode='html')
 
 
+@traced('telegram.send_as_video')
 async def send_as_video(bot: Bot, media: bytes, caption: str, post_id: str):
     if len(media) < 50*1024*1024:
         cached_name = f'{post_id}.mp4'
@@ -53,6 +56,7 @@ async def send_as_video(bot: Bot, media: bytes, caption: str, post_id: str):
                                parse_mode='html')
 
 
+@traced('telegram.send_as_document')
 async def send_as_document(bot: Bot, media: bytes, caption: str, post_id: str, ext: str):
     if len(media) < 50*1024*1024:
         await bot.send_document(config.chat_id,

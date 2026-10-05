@@ -14,6 +14,7 @@ from pydantic import BaseModel
 from context import storage, config, tag_to_hashtag, bot
 from utils.media import resize_image, convert_to_mp4
 from utils.telegram import send_as_photo, send_as_video, send_as_document
+from utils.tracing import get_tracer, traced
 
 logger = logging.getLogger('gelbooru')
 
@@ -53,6 +54,7 @@ class GelbooruPost(BaseModel):
     def tag_list(self):
         return self.tags.split(' ')
 
+    @traced('gelbooru.send_post')
     async def send_post(self):
         from websites import gelbooru
 
@@ -133,6 +135,7 @@ class Gelbooru:
         self._client = httpx.AsyncClient(base_url='https://gelbooru.com',
                                          headers={'User-Agent': 'bot/py-3.0 (bakatrouble)'})
 
+    @traced('gelbooru.get_posts')
     async def get_posts(self,
                         tags: str = '',
                         page: int = 0,
@@ -151,6 +154,7 @@ class Gelbooru:
         r = await self._client.get(f'/index.php', params=params)
         return [GelbooruPost.model_validate(p) for p in r.json()['post']]
 
+    @traced('gelbooru.get_tags')
     async def get_tags(self, tags: list[str]) -> list[GelbooruTag]:
         fetched_tags = []
         for page_num in count():
@@ -171,10 +175,12 @@ class Gelbooru:
                 break
         return fetched_tags
 
+    @traced('gelbooru.download_media')
     async def download_media(self, url: str) -> bytes:
         r = await self._client.get(url, headers={'referer': 'https://gelbooru.com/'})
         return r.content
 
+    @traced('gelbooru.process_new_posts')
     async def process_new_posts(self):
         async with storage.gelbooru.lock:
             logger.info('lock acquired')
@@ -243,10 +249,12 @@ class Gelbooru:
                     await asyncio.sleep(3)
 
     async def worker(self):
+        tracer = get_tracer('websites.gelbooru')
         while True:
-            try:
-                await self.process_new_posts()
-            except Exception as e:
-                logger.error(traceback.format_exception(e))
-            finally:
-                await asyncio.sleep(config.gelbooru.interval.total_seconds())
+            with tracer.start_as_current_span('gelbooru.worker_tick'):
+                try:
+                    await self.process_new_posts()
+                except Exception as e:
+                    logger.error(traceback.format_exception(e))
+                finally:
+                    await asyncio.sleep(config.gelbooru.interval.total_seconds())

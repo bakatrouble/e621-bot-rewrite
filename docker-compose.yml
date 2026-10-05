@@ -5,4 +5,6 @@ services:
     volumes:
       - /srv/apps/e621-bot-rewrite/config.yaml:/app/config.yaml
       - /srv/apps/e621-bot-rewrite/cache:/app/cache.yaml
-
+    # environment:
+    #   OTEL_EXPORTER_OTLP_ENDPOINT: http://tempo:4317
+    #   OTEL_ENVIRONMENT: production

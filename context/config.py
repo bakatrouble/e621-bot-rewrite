@@ -2,7 +2,7 @@ from datetime import timedelta
 from pathlib import Path
 
 import yaml
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 __all__ = ['Config']
@@ -24,6 +24,13 @@ class GelbooruConfig(BaseModel):
     interval: timedelta
 
 
+class TracingConfig(BaseModel):
+    enabled: bool = True
+    endpoint: str = 'http://localhost:4317'
+    environment: str = 'development'
+    sample_ratio: float = 1.0
+
+
 class Config(BaseModel):
     bot_token: str
     chat_id: int
@@ -34,6 +41,7 @@ class Config(BaseModel):
     destinations: DestinationsConfig | None = None
     production: bool | None = False
     gelbooru: GelbooruConfig | None = None
+    tracing: TracingConfig = Field(default_factory=TracingConfig)
 
     @classmethod
     def load(cls, path: str) -> 'Config':

@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from redis import RedisError
 from redis.asyncio import Redis
 
+from utils.tracing import traced
+
 
 __all__ = ['Storage', 'StorageDump', 'migrations']
 
@@ -22,15 +24,19 @@ class StorageImpl:
         self.lock = redis.lock(f'subscriber:{self._name}:lock')
         self._logger = logger
 
+    @traced('storage.get_subs')
     async def get_subs(self) -> list[str]:
         return [str(sub) for sub in sorted(await self._redis.smembers(f'subscriber:{self._name}:subs'))]
 
+    @traced('storage.add_sub')
     async def add_sub(self, sub: str):
         await self._redis.sadd(f'subscriber:{self._name}:subs', sub)
 
+    @traced('storage.remove_sub')
     async def remove_sub(self, sub: str):
         await self._redis.srem(f'subscriber:{self._name}:subs', sub)
 
+    @traced('storage.get_post_sent')
     async def get_post_sent(self, post_ids: list[int]) -> dict[int, bool]:
         if not post_ids:
             return {}
@@ -38,19 +44,24 @@ class StorageImpl:
                 for post_id, ismember
                 in zip(post_ids, await self._redis.smismember(f'subscriber:{self._name}:sent', post_ids))}
 
+    @traced('storage.set_post_sent')
     async def set_post_sent(self, post_id: int):
         await self._redis.sadd(f'subscriber:{self._name}:sent', post_id)
 
+    @traced('storage.get_last_post_version')
     async def get_last_post_version(self) -> int:
         version = int(await self._redis.get(f'subscriber:{self._name}:last_post_version') or '0')
         return version
 
+    @traced('storage.set_last_post_version')
     async def set_last_post_version(self, post_version: int):
         await self._redis.set(f'subscriber:{self._name}:last_post_version', post_version)
 
+    @traced('storage.get_scanned')
     async def get_scanned(self, key: str) -> bool:
         return await self._redis.hexists(f'subscriber:{self._name}:scanned', key)
 
+    @traced('storage.set_scanned')
     async def set_scanned(self, key: str):
         await self._redis.hset(f'subscriber:{self._name}:scanned', key, 1)
 

@@ -8,7 +8,10 @@ from PIL import Image
 from PIL.Image import Resampling
 from ffmpeg.asyncio import FFmpeg
 
+from utils.tracing import traced
 
+
+@traced('media.convert_to_mp4')
 async def convert_to_mp4(media: bytes) -> bytes:
     mime = magic.from_buffer(media, mime=True)
 
@@ -43,6 +46,7 @@ async def convert_to_mp4(media: bytes) -> bytes:
             return f.read()
 
 
+@traced('media.resize_image')
 async def resize_image(media: bytes) -> bytes:
     src_im = Image.open(BytesIO(media))
     src_im.load()

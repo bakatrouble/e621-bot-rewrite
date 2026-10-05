@@ -9,6 +9,7 @@ from httpx import AsyncClient
 
 from context import bot, config
 from utils.cache import is_cached, cache_file
+from utils.tracing import get_tracer, traced
 
 
 class SendCallback(CallbackData, prefix='send'):
@@ -30,11 +31,14 @@ class TelegramBot:
         self._dispatcher.callback_query.register(self.unsend_handler, UnsendCallback.filter())
 
     async def start(self):
+        from utils.tracing import setup_tracing
+        setup_tracing('e621-bot-telegram')
         await self._dispatcher.start_polling(bot, handle_signals=False)
 
     async def stop(self):
         await self._dispatcher.stop_polling()
 
+    @traced('telegram.send_handler')
     async def send_handler(self, query: CallbackQuery, callback_data: SendCallback):
         message = query.message
         if isinstance(message, InaccessibleMessage) or not message:
@@ -93,6 +97,7 @@ class TelegramBot:
                                                                          filename=cached_name).pack()
             await message.edit_reply_markup(reply_markup=kbd)
 
+    @traced('telegram.unsend_handler')
     async def unsend_handler(self, query: CallbackQuery, callback_data: UnsendCallback):
         message = query.message
         if isinstance(message, InaccessibleMessage) or not message:

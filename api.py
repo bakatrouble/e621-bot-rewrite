@@ -8,14 +8,18 @@ from sanic.exceptions import BadURL
 from sanic_ext import Extend
 
 from context import config, storage as storage_root
+from utils.tracing import instrument_sanic, traced
 
 
 app = Sanic('subscriber')
 app.config.CORS_ORIGINS = '*'
 Extend(app)
+instrument_sanic(app)
 
 
 async def start():
+    from utils.tracing import setup_tracing
+    setup_tracing('e621-bot-api')
     conf = Config()
     conf.bind = config.api.bind
     await hypercorn.asyncio.serve(app, conf)
@@ -45,6 +49,7 @@ def get_storage(request: Request):
 
 @app.get('/api/subscriptions')
 @protected()
+@traced('api.subscriptions_get')
 async def subscriptions_get(request: Request):
     storage = get_storage(request)
     subs = await storage.get_subs()
@@ -53,6 +58,7 @@ async def subscriptions_get(request: Request):
 
 @app.post('/api/subscriptions')
 @protected()
+@traced('api.subscriptions_post')
 async def subscriptions_post(request: Request):
     storage = get_storage(request)
     subs: list[str] = request.json.get('subs', [])
@@ -75,6 +81,7 @@ async def subscriptions_post(request: Request):
 
 @app.delete('/api/subscriptions')
 @protected()
+@traced('api.subscriptions_delete')
 async def subscriptions_delete(request: Request):
     storage = get_storage(request)
     subs: list[str] = request.json.get('subs', [])

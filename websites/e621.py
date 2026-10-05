@@ -11,6 +11,7 @@ from context import storage, config, tag_to_hashtag, bot
 from context.query import Query
 from utils.media import resize_image, convert_to_mp4
 from utils.telegram import send_as_photo, send_as_video, send_as_document
+from utils.tracing import get_tracer, traced
 
 logger = logging.getLogger('e621')
 
@@ -53,6 +54,7 @@ class E621Post(BaseModel):
                 self.tags.lore +
                 self.tags.meta)
 
+    @traced('e621.send_post')
     async def send_post(self, matched_queries: list[Query] | None = None):
         from websites import e621
 
@@ -141,6 +143,7 @@ class E621:
         self._client = httpx.AsyncClient(base_url='https://e621.net',
                                          headers={'User-Agent': 'bot/py-3.0 (bakatrouble)'})
 
+    @traced('e621.get_post')
     async def get_post(self, post_id: int) -> E621Post:
         r = await self._client.get(f'/posts/{post_id}.json')
         post = E621Post.model_validate(r.json()['post'])
@@ -149,6 +152,7 @@ class E621:
             post.file.url = f'https://static1.e621.net/data/{md5[0:2]}/{md5[2:4]}/{md5}.{post.file.ext}'
         return post
 
+    @traced('e621.get_post_versions')
     async def get_post_versions(self,
                                 after_id: int | None = None,
                                 before_id: int | None = None,
@@ -172,6 +176,7 @@ class E621:
 
         return [E621PostVersion.model_validate(pv) for pv in r]
 
+    @traced('e621.get_posts')
     async def get_posts(self,
                         tags: str = '',
                         page: int = 1,
@@ -187,10 +192,12 @@ class E621:
         tag_aliases = [E621TagAlias.model_validate(ta) for ta in r]
         return [ta.consequent_name for ta in tag_aliases if ta.status == 'active']
 
+    @traced('e621.download_media')
     async def download_media(self, url: str) -> bytes:
         r = await self._client.get(url)
         return r.content
 
+    @traced('e621.process_new_posts')
     async def process_new_posts(self):
         logger.info('processing new posts')
         async with storage.e621.lock:
@@ -239,10 +246,12 @@ class E621:
                     await asyncio.sleep(3)
 
     async def worker(self):
+        tracer = get_tracer('websites.e621')
         while True:
-            try:
-                await self.process_new_posts()
-            except Exception as e:
-                logger.error(traceback.format_exception(e))
-            finally:
-                await asyncio.sleep(config.interval.total_seconds())
+            with tracer.start_as_current_span('e621.worker_tick'):
+                try:
+                    await self.process_new_posts()
+                except Exception as e:
+                    logger.error(traceback.format_exception(e))
+                finally:
+                    await asyncio.sleep(config.interval.total_seconds())
