@@ -207,7 +207,7 @@ class Gelbooru:
                 new_posts = []
                 logging.info(f'fetching posts for `{'`, `'.join(chunk)}`')
                 for page_num in count():
-                    page = await self.get_posts(tags=' ~ '.join(chunk), page=page_num, limit=page_size)
+                    page = await self.get_posts(tags=f'{{{' ~ '.join(chunk)}}}', page=page_num, limit=page_size)
                     sent_flags = await storage.gelbooru.get_post_sent([p.id for p in page])
                     final_page = False
                     for post in page:
