@@ -1,0 +1,5 @@
+#!/bin/bash
+
+docker build . -t ghcr.io/bakatrouble/e621-bot-rewrite
+docker push ghcr.io/bakatrouble/e621-bot-rewrite:latest
+
