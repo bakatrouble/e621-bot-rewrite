@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from enum import Enum
 from functools import cached_property
 from itertools import count
+from random import shuffle
 from typing import Literal
 
 import httpx
@@ -179,14 +180,36 @@ class Gelbooru:
             logger.info('lock acquired')
             page_size = 100
             posts_to_post: list[GelbooruPost] = []
-            for sub in await storage.gelbooru.get_subs():
+
+            subs = await storage.gelbooru.get_subs()
+            for sub in subs:
+                if not await storage.gelbooru.get_scanned(sub):
+                    posts = await self.get_posts(tags=sub, page=0, limit=page_size)
+                    for post in posts:
+                        await storage.gelbooru.set_post_sent(post.id)
+                    await storage.gelbooru.set_scanned(sub)
+
+            chunks: list[list[str]] = []
+            partial_chunk: list[str] = []
+            shuffle(subs)
+            for sub in subs:
+                if ' ' in sub:
+                    chunks.append([sub])
+                else:
+                    partial_chunk.append(sub)
+                    if len(' ~ '.join(partial_chunk)) > 400:
+                        chunks.append(partial_chunk)
+                        partial_chunk = []
+            if partial_chunk:
+                chunks.append(partial_chunk)
+
+            for chunk in chunks:
                 new_posts = []
-                scanned = await storage.gelbooru.get_scanned(sub)
-                logging.info(f'fetching posts for `{sub}`')
+                logging.info(f'fetching posts for `{'`, `'.join(chunk)}`')
                 for page_num in count():
-                    page = await self.get_posts(tags=sub, page=page_num, limit=page_size)
+                    page = await self.get_posts(tags=' ~ '.join(chunk), page=page_num, limit=page_size)
                     sent_flags = await storage.gelbooru.get_post_sent([p.id for p in page])
-                    final_page = not scanned
+                    final_page = False
                     for post in page:
                         if not sent_flags[post.id]:
                             post.sub = sub
@@ -197,11 +220,6 @@ class Gelbooru:
                     logger.info(f'page {page_num} loaded, count={len(page)}, new_posts={len(new_posts)}')
                     if final_page or len(page) < page_size:
                         break
-                if not scanned:
-                    for post in new_posts:
-                        await storage.gelbooru.set_post_sent(post.id)
-                    await storage.gelbooru.set_scanned(sub)
-                    continue
                 posts_to_post.extend(new_posts)
 
             posts_to_post.sort(key=lambda p: p.id)
