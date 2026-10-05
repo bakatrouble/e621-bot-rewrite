@@ -720,3 +720,4 @@ def instrument_sanic(app, service_name: str = 'e621-bot-api'):
                 span.set_status(Status(StatusCode.ERROR, str(exception)))
             except Exception:
                 pass
+        raise exception
