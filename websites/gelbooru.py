@@ -14,7 +14,7 @@ from pydantic import BaseModel
 from context import storage, config, tag_to_hashtag, bot
 from utils.media import resize_image, convert_to_mp4
 from utils.telegram import send_as_photo, send_as_video, send_as_document
-from utils.tracing import get_tracer, set_span_attributes, traced
+from utils.tracing import get_tracer, record_span_error, set_span_attributes, traced
 
 logger = logging.getLogger('gelbooru')
 
@@ -254,16 +254,23 @@ class Gelbooru:
                 logger.info(f'no unsent posts')
                 return
 
+            post_tracer = get_tracer('websites.gelbooru')
             for post in posts_to_post:
-                try:
-                    if not sent_flags[post.id]:
-                        await post.send_post()
-                        await storage.gelbooru.set_post_sent(post.id)
-                        sent_flags[post.id] = True
-                except Exception as e:
-                    logger.error(traceback.format_exception(e))
-                finally:
-                    await asyncio.sleep(3)
+                with post_tracer.start_as_current_span('gelbooru.post') as span:
+                    span.set_attribute('gelbooru.post.id', post.id)
+                    span.set_attribute('gelbooru.sub', post.sub or '')
+                    try:
+                        if not sent_flags[post.id]:
+                            await post.send_post()
+                            await storage.gelbooru.set_post_sent(post.id)
+                            sent_flags[post.id] = True
+                            span.set_attribute('gelbooru.post.sent', True)
+                        else:
+                            span.set_attribute('gelbooru.post.sent', False)
+                    except Exception as e:
+                        record_span_error(span, e)
+                        logger.error(traceback.format_exception(e))
+                await asyncio.sleep(3)
             set_span_attributes({'gelbooru.posts.sent': sum(1 for v in sent_flags.values() if v)})
 
     async def worker(self):

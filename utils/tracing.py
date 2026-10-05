@@ -555,6 +555,16 @@ def set_span_attributes(attributes: dict) -> None:
         pass
 
 
+def record_span_error(span, exc: BaseException) -> None:
+    """Record an exception on a span and mark it ERROR. Never raises."""
+    try:
+        from opentelemetry.trace import Status, StatusCode
+        span.record_exception(exc)
+        span.set_status(Status(StatusCode.ERROR, str(exc)))
+    except Exception:
+        pass
+
+
 def traced(span_name: str | None = None, attributes: dict | None = None):
     """Decorator adding an OTel span around sync/async functions.
 

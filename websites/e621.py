@@ -11,7 +11,7 @@ from context import storage, config, tag_to_hashtag, bot
 from context.query import Query
 from utils.media import resize_image, convert_to_mp4
 from utils.telegram import send_as_photo, send_as_video, send_as_document
-from utils.tracing import get_tracer, set_span_attributes, traced
+from utils.tracing import get_tracer, record_span_error, set_span_attributes, traced
 
 logger = logging.getLogger('e621')
 
@@ -265,17 +265,26 @@ class E621:
                 await storage.e621.set_last_post_version(last_post_version)
                 return
 
+            post_tracer = get_tracer('websites.e621')
             for plan in pvs_to_post:
-                try:
-                    if not sent_flags[plan.post_version.post_id]:
-                        await plan.send_post()
-                        await storage.e621.set_post_sent(plan.post_version.post_id)
-                        sent_flags[plan.post_version.post_id] = True
-                    await storage.e621.set_last_post_version(plan.post_version.id)
-                except Exception as e:
-                    logger.error(traceback.format_exception(e))
-                finally:
-                    await asyncio.sleep(3)
+                post_id = plan.post_version.post_id
+                with post_tracer.start_as_current_span('e621.post') as span:
+                    span.set_attribute('e621.post.id', post_id)
+                    span.set_attribute('e621.post_version.id', plan.post_version.id)
+                    span.set_attribute('e621.post.matched_queries', [str(q) for q in plan.matched_queries])
+                    try:
+                        if not sent_flags[post_id]:
+                            await plan.send_post()
+                            await storage.e621.set_post_sent(post_id)
+                            sent_flags[post_id] = True
+                            span.set_attribute('e621.post.sent', True)
+                        else:
+                            span.set_attribute('e621.post.sent', False)
+                        await storage.e621.set_last_post_version(plan.post_version.id)
+                    except Exception as e:
+                        record_span_error(span, e)
+                        logger.error(traceback.format_exception(e))
+                await asyncio.sleep(3)
             set_span_attributes({'e621.posts.sent': sum(1 for v in sent_flags.values() if v)})
 
     async def worker(self):
