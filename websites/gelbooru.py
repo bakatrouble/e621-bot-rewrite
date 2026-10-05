@@ -195,18 +195,21 @@ class Gelbooru:
     @traced('gelbooru.process_new_posts')
     async def process_new_posts(self):
         async with storage.gelbooru.lock:
+            tracer = get_tracer('websites.gelbooru')
+
             logger.info('lock acquired')
             page_size = 100
             posts_to_post: list[GelbooruPost] = []
 
             subs = await storage.gelbooru.get_subs()
-            set_span_attributes({'gelbooru.subs.count': len(subs)})
-            for sub in subs:
-                if not await storage.gelbooru.get_scanned(sub):
-                    posts = await self.get_posts(tags=sub, page=0, limit=page_size)
-                    for post in posts:
-                        await storage.gelbooru.set_post_sent(post.id)
-                    await storage.gelbooru.set_scanned(sub)
+            with tracer.start_as_current_span('gelbooru.process_new_subs') as span:
+                span.set_attributes({'gelbooru.subs.count': len(subs)})
+                for sub in subs:
+                    if not await storage.gelbooru.get_scanned(sub):
+                        posts = await self.get_posts(tags=sub, page=0, limit=page_size)
+                        for post in posts:
+                            await storage.gelbooru.set_post_sent(post.id)
+                        await storage.gelbooru.set_scanned(sub)
 
             chunks: list[list[str]] = []
             partial_chunk: list[str] = []
@@ -222,24 +225,25 @@ class Gelbooru:
             if partial_chunk:
                 chunks.append(partial_chunk)
 
-            for chunk in chunks:
-                new_posts = []
-                logging.info(f'fetching posts for `{'`, `'.join(chunk)}`')
-                for page_num in count():
-                    page = await self.get_posts(tags=f'{{{' ~ '.join(chunk)}}}', page=page_num, limit=page_size)
-                    sent_flags = await storage.gelbooru.get_post_sent([p.id for p in page])
-                    final_page = False
-                    for post in page:
-                        if not sent_flags[post.id]:
-                            post.sub = sub
-                            new_posts.append(post)
-                        else:
-                            final_page = True
+            with tracer.start_as_current_span('gelbooru.fetch_posts') as span:
+                for chunk in chunks:
+                    new_posts = []
+                    logging.info(f'fetching posts for `{'`, `'.join(chunk)}`')
+                    for page_num in count():
+                        page = await self.get_posts(tags=f'{{{' ~ '.join(chunk)}}}', page=page_num, limit=page_size)
+                        sent_flags = await storage.gelbooru.get_post_sent([p.id for p in page])
+                        final_page = False
+                        for post in page:
+                            if not sent_flags[post.id]:
+                                post.sub = sub
+                                new_posts.append(post)
+                            else:
+                                final_page = True
 
-                    logger.info(f'page {page_num} loaded, count={len(page)}, new_posts={len(new_posts)}')
-                    if final_page or len(page) < page_size:
-                        break
-                posts_to_post.extend(new_posts)
+                        logger.info(f'page {page_num} loaded, count={len(page)}, new_posts={len(new_posts)}')
+                        if final_page or len(page) < page_size:
+                            break
+                    posts_to_post.extend(new_posts)
 
             posts_to_post.sort(key=lambda p: p.id)
             sent_flags = await storage.gelbooru.get_post_sent([p.id for p in posts_to_post])
@@ -254,23 +258,24 @@ class Gelbooru:
                 logger.info(f'no unsent posts')
                 return
 
-            post_tracer = get_tracer('websites.gelbooru')
-            for post in posts_to_post:
-                with post_tracer.start_as_current_span('gelbooru.post') as span:
-                    span.set_attribute('gelbooru.post.id', post.id)
-                    span.set_attribute('gelbooru.sub', post.sub or '')
-                    try:
-                        if not sent_flags[post.id]:
-                            await post.send_post()
-                            await storage.gelbooru.set_post_sent(post.id)
-                            sent_flags[post.id] = True
-                            span.set_attribute('gelbooru.post.sent', True)
-                        else:
-                            span.set_attribute('gelbooru.post.sent', False)
-                    except Exception as e:
-                        record_span_error(span, e)
-                        logger.error(traceback.format_exception(e))
-                await asyncio.sleep(3)
+            with tracer.start_as_current_span('gelbooru.send_posts') as span:
+                span.set_attributes({'gelbooru.posts.count': len(posts_to_post)})
+                for post in posts_to_post:
+                    with tracer.start_as_current_span('gelbooru.post') as span:
+                        span.set_attribute('gelbooru.post.id', post.id)
+                        span.set_attribute('gelbooru.sub', post.sub or '')
+                        try:
+                            if not sent_flags[post.id]:
+                                await post.send_post()
+                                await storage.gelbooru.set_post_sent(post.id)
+                                sent_flags[post.id] = True
+                                span.set_attribute('gelbooru.post.sent', True)
+                            else:
+                                span.set_attribute('gelbooru.post.sent', False)
+                        except Exception as e:
+                            record_span_error(span, e)
+                            logger.error(traceback.format_exception(e))
+                    await asyncio.sleep(3)
             set_span_attributes({'gelbooru.posts.sent': sum(1 for v in sent_flags.values() if v)})
 
     async def worker(self):

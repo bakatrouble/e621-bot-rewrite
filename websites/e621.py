@@ -227,27 +227,29 @@ class E621:
     async def process_new_posts(self):
         logger.info('processing new posts')
         async with storage.e621.lock:
+            tracer = get_tracer('websites.e621')
             logger.info('lock acquired')
             queries = Query.get_queries(await storage.e621.get_subs())
             set_span_attributes({'e621.subs.count': len(queries)})
             last_post_version = await storage.e621.get_last_post_version()
             page_size = 320
             pvs_to_post: list[E621MatchedPV] = []
-            for i in range(10):
-                after_id = last_post_version or None
-                page = await self.get_post_versions(after_id=after_id, limit=page_size)
+            with tracer.start_as_current_span('e621.fetch_post_versions'):
+                for i in range(10):
+                    after_id = last_post_version or None
+                    page = await self.get_post_versions(after_id=after_id, limit=page_size)
 
-                page.reverse()
-                for post_version in page:
-                    if post_version.id > last_post_version:
-                        last_post_version = post_version.id
-                    if matched_queries := post_version.check_queries(queries):
-                        pvs_to_post.append(E621MatchedPV(matched_queries, post_version))
+                    page.reverse()
+                    for post_version in page:
+                        if post_version.id > last_post_version:
+                            last_post_version = post_version.id
+                        if matched_queries := post_version.check_queries(queries):
+                            pvs_to_post.append(E621MatchedPV(matched_queries, post_version))
 
-                logger.info(f'page {i} loaded, count={len(page)}, matched={len(pvs_to_post)}')
+                    logger.info(f'page {i} loaded, count={len(page)}, matched={len(pvs_to_post)}')
 
-                if len(page) < page_size:
-                    break
+                    if len(page) < page_size:
+                        break
 
             pvs_to_post.sort(key=lambda plan: plan.post_version.id)
             sent_flags = await storage.e621.get_post_sent([plan.post_version.post_id for plan in pvs_to_post])
@@ -265,26 +267,27 @@ class E621:
                 await storage.e621.set_last_post_version(last_post_version)
                 return
 
-            post_tracer = get_tracer('websites.e621')
-            for plan in pvs_to_post:
-                post_id = plan.post_version.post_id
-                with post_tracer.start_as_current_span('e621.post') as span:
-                    span.set_attribute('e621.post.id', post_id)
-                    span.set_attribute('e621.post_version.id', plan.post_version.id)
-                    span.set_attribute('e621.post.matched_queries', [str(q) for q in plan.matched_queries])
-                    try:
-                        if not sent_flags[post_id]:
-                            await plan.send_post()
-                            await storage.e621.set_post_sent(post_id)
-                            sent_flags[post_id] = True
-                            span.set_attribute('e621.post.sent', True)
-                        else:
-                            span.set_attribute('e621.post.sent', False)
-                        await storage.e621.set_last_post_version(plan.post_version.id)
-                    except Exception as e:
-                        record_span_error(span, e)
-                        logger.error(traceback.format_exception(e))
-                await asyncio.sleep(3)
+            with tracer.start_as_current_span('e621.send_posts') as span:
+                span.set_attributes({'e621.posts.count': len(pvs_to_post)})
+                for plan in pvs_to_post:
+                    post_id = plan.post_version.post_id
+                    with tracer.start_as_current_span('e621.post') as span:
+                        span.set_attribute('e621.post.id', post_id)
+                        span.set_attribute('e621.post_version.id', plan.post_version.id)
+                        span.set_attribute('e621.post.matched_queries', [str(q) for q in plan.matched_queries])
+                        try:
+                            if not sent_flags[post_id]:
+                                await plan.send_post()
+                                await storage.e621.set_post_sent(post_id)
+                                sent_flags[post_id] = True
+                                span.set_attribute('e621.post.sent', True)
+                            else:
+                                span.set_attribute('e621.post.sent', False)
+                            await storage.e621.set_last_post_version(plan.post_version.id)
+                        except Exception as e:
+                            record_span_error(span, e)
+                            logger.error(traceback.format_exception(e))
+                    await asyncio.sleep(3)
             set_span_attributes({'e621.posts.sent': sum(1 for v in sent_flags.values() if v)})
 
     async def worker(self):
