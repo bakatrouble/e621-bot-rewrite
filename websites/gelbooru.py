@@ -14,7 +14,7 @@ from pydantic import BaseModel
 from context import storage, config, tag_to_hashtag, bot
 from utils.media import resize_image, convert_to_mp4
 from utils.telegram import send_as_photo, send_as_video, send_as_document
-from utils.tracing import get_tracer, traced
+from utils.tracing import get_tracer, set_span_attributes, traced
 
 logger = logging.getLogger('gelbooru')
 
@@ -58,6 +58,8 @@ class GelbooruPost(BaseModel):
     async def send_post(self):
         from websites import gelbooru
 
+        set_span_attributes({'gelbooru.post.id': self.id, 'gelbooru.sub': self.sub or ''})
+
         if not self.file_url:
             logger.warning(f'file url is missing for post #{self.id}')
             return
@@ -89,13 +91,17 @@ class GelbooruPost(BaseModel):
 
         media_bytes = await gelbooru.download_media(self.file_url)
         ext = self.file_url.split('.')[-1]
+        set_span_attributes({'gelbooru.media.bytes': len(media_bytes), 'gelbooru.file.ext': ext})
         if ext in ('jpg', 'png', 'webp'):
             media_bytes = await resize_image(media_bytes)
+            set_span_attributes({'gelbooru.send.via': 'photo', 'gelbooru.sent.bytes': len(media_bytes)})
             await send_as_photo(bot, media_bytes, caption, f'g{self.id}')
         elif ext in ('gif', 'mp4', 'webm'):
             media_bytes = await convert_to_mp4(media_bytes)
+            set_span_attributes({'gelbooru.send.via': 'video', 'gelbooru.sent.bytes': len(media_bytes)})
             await send_as_video(bot, media_bytes, caption, f'g{self.id}')
         elif ext in ('swf',):
+            set_span_attributes({'gelbooru.send.via': 'document', 'gelbooru.sent.bytes': len(media_bytes)})
             await send_as_document(bot, media_bytes, caption, f'g{self.id}', ext)
         else:
             raise RuntimeError(f'unsupported file type: {ext}')
@@ -140,6 +146,7 @@ class Gelbooru:
                         tags: str = '',
                         page: int = 0,
                         limit: int = 100):
+        set_span_attributes({'gelbooru.tags': tags, 'gelbooru.page': page, 'gelbooru.limit': limit})
         params = {
             'page': 'dapi',
             's': 'post',
@@ -152,10 +159,13 @@ class Gelbooru:
             'api_key': config.gelbooru.api_key,
         }
         r = await self._client.get(f'/index.php', params=params)
-        return [GelbooruPost.model_validate(p) for p in r.json()['post']]
+        posts = [GelbooruPost.model_validate(p) for p in r.json()['post']]
+        set_span_attributes({'gelbooru.posts.count': len(posts)})
+        return posts
 
     @traced('gelbooru.get_tags')
     async def get_tags(self, tags: list[str]) -> list[GelbooruTag]:
+        set_span_attributes({'gelbooru.tags.count': len(tags)})
         fetched_tags = []
         for page_num in count():
             params = {
@@ -173,11 +183,13 @@ class Gelbooru:
             fetched_tags += [GelbooruTag.model_validate(p) for p in r.json()['tag']]
             if len(r.json()['tag']) < 100:
                 break
+        set_span_attributes({'gelbooru.tags.fetched': len(fetched_tags)})
         return fetched_tags
 
     @traced('gelbooru.download_media')
     async def download_media(self, url: str) -> bytes:
         r = await self._client.get(url, headers={'referer': 'https://gelbooru.com/'})
+        set_span_attributes({'gelbooru.media.bytes': len(r.content)})
         return r.content
 
     @traced('gelbooru.process_new_posts')
@@ -188,6 +200,7 @@ class Gelbooru:
             posts_to_post: list[GelbooruPost] = []
 
             subs = await storage.gelbooru.get_subs()
+            set_span_attributes({'gelbooru.subs.count': len(subs)})
             for sub in subs:
                 if not await storage.gelbooru.get_scanned(sub):
                     posts = await self.get_posts(tags=sub, page=0, limit=page_size)
@@ -232,6 +245,10 @@ class Gelbooru:
             sent_flags = await storage.gelbooru.get_post_sent([p.id for p in posts_to_post])
             logging.info(f'sent_flags={sent_flags}')
             posts_to_post = [p for p in posts_to_post if not sent_flags[p.id]]
+            set_span_attributes({
+                'gelbooru.chunks.count': len(chunks),
+                'gelbooru.posts.unsent': len(posts_to_post),
+            })
 
             if not posts_to_post:
                 logger.info(f'no unsent posts')
@@ -247,6 +264,7 @@ class Gelbooru:
                     logger.error(traceback.format_exception(e))
                 finally:
                     await asyncio.sleep(3)
+            set_span_attributes({'gelbooru.posts.sent': sum(1 for v in sent_flags.values() if v)})
 
     async def worker(self):
         tracer = get_tracer('websites.gelbooru')
@@ -256,5 +274,4 @@ class Gelbooru:
                     await self.process_new_posts()
                 except Exception as e:
                     logger.error(traceback.format_exception(e))
-                finally:
-                    await asyncio.sleep(config.gelbooru.interval.total_seconds())
+            await asyncio.sleep(config.gelbooru.interval.total_seconds())

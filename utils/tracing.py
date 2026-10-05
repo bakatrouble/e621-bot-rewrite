@@ -258,9 +258,7 @@ def setup_tracing(service_name: str, endpoint: str | None = None,
         from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
         HTTPXClientInstrumentor().instrument(
             request_hook=_httpx_sanitize_hook,
-            response_hook=None,
             async_request_hook=_httpx_async_sanitize_hook,
-            async_response_hook=None,
         )
 
     def _redis():

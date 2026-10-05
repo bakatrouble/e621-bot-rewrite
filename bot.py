@@ -9,7 +9,7 @@ from httpx import AsyncClient
 
 from context import bot, config
 from utils.cache import is_cached, cache_file
-from utils.tracing import get_tracer, traced
+from utils.tracing import get_tracer, set_span_attributes, traced
 
 
 class SendCallback(CallbackData, prefix='send'):
@@ -40,6 +40,10 @@ class TelegramBot:
 
     @traced('telegram.send_handler')
     async def send_handler(self, query: CallbackQuery, callback_data: SendCallback):
+        set_span_attributes({
+            'telegram.destination': callback_data.destination,
+            'telegram.filename': callback_data.filename,
+        })
         message = query.message
         if isinstance(message, InaccessibleMessage) or not message:
             logging.warning(f'unable to access message')
@@ -76,6 +80,7 @@ class TelegramBot:
         async with AsyncClient() as client:
             r = await client.post(f'{api_base}/internalSend', json={'path': str(cache_path)})
             r = r.json()
+        set_span_attributes({'telegram.result': r['status']})
         if r['status'] == 'ok':
             await query.answer('Sent')
         elif r['status'] == 'duplicate':
@@ -99,6 +104,10 @@ class TelegramBot:
 
     @traced('telegram.unsend_handler')
     async def unsend_handler(self, query: CallbackQuery, callback_data: UnsendCallback):
+        set_span_attributes({
+            'telegram.destination': callback_data.destination,
+            'telegram.filename': callback_data.filename,
+        })
         message = query.message
         if isinstance(message, InaccessibleMessage) or not message:
             logging.warning(f'unable to access message')
@@ -115,6 +124,7 @@ class TelegramBot:
         async with AsyncClient() as client:
             r = await client.delete(f'{api_base}/internalDelete', json={'upload_id': callback_data.upload_id})
             r = r.json()
+        set_span_attributes({'telegram.result': r['status']})
         if r['status'] == 'ok':
             await query.answer('Unsent')
         else:

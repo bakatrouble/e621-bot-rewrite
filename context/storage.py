@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from redis import RedisError
 from redis.asyncio import Redis
 
-from utils.tracing import traced
+from utils.tracing import set_span_attributes, traced
 
 
 __all__ = ['Storage', 'StorageDump', 'migrations']
@@ -26,43 +26,57 @@ class StorageImpl:
 
     @traced('storage.get_subs')
     async def get_subs(self) -> list[str]:
-        return [str(sub) for sub in sorted(await self._redis.smembers(f'subscriber:{self._name}:subs'))]
+        set_span_attributes({'storage.site': self._name})
+        subs = [str(sub) for sub in sorted(await self._redis.smembers(f'subscriber:{self._name}:subs'))]
+        set_span_attributes({'storage.subs.count': len(subs)})
+        return subs
 
     @traced('storage.add_sub')
     async def add_sub(self, sub: str):
+        set_span_attributes({'storage.site': self._name, 'storage.sub': sub})
         await self._redis.sadd(f'subscriber:{self._name}:subs', sub)
 
     @traced('storage.remove_sub')
     async def remove_sub(self, sub: str):
+        set_span_attributes({'storage.site': self._name, 'storage.sub': sub})
         await self._redis.srem(f'subscriber:{self._name}:subs', sub)
 
     @traced('storage.get_post_sent')
     async def get_post_sent(self, post_ids: list[int]) -> dict[int, bool]:
+        set_span_attributes({'storage.site': self._name, 'storage.posts.requested': len(post_ids)})
         if not post_ids:
             return {}
-        return {post_id: bool(ismember)
-                for post_id, ismember
-                in zip(post_ids, await self._redis.smismember(f'subscriber:{self._name}:sent', post_ids))}
+        flags = {post_id: bool(ismember)
+                 for post_id, ismember
+                 in zip(post_ids, await self._redis.smismember(f'subscriber:{self._name}:sent', post_ids))}
+        set_span_attributes({'storage.posts.sent': sum(1 for v in flags.values() if v)})
+        return flags
 
     @traced('storage.set_post_sent')
     async def set_post_sent(self, post_id: int):
+        set_span_attributes({'storage.site': self._name, 'storage.post.id': post_id})
         await self._redis.sadd(f'subscriber:{self._name}:sent', post_id)
 
     @traced('storage.get_last_post_version')
     async def get_last_post_version(self) -> int:
+        set_span_attributes({'storage.site': self._name})
         version = int(await self._redis.get(f'subscriber:{self._name}:last_post_version') or '0')
+        set_span_attributes({'storage.last_post_version': version})
         return version
 
     @traced('storage.set_last_post_version')
     async def set_last_post_version(self, post_version: int):
+        set_span_attributes({'storage.site': self._name, 'storage.last_post_version': post_version})
         await self._redis.set(f'subscriber:{self._name}:last_post_version', post_version)
 
     @traced('storage.get_scanned')
     async def get_scanned(self, key: str) -> bool:
+        set_span_attributes({'storage.site': self._name, 'storage.key': key})
         return await self._redis.hexists(f'subscriber:{self._name}:scanned', key)
 
     @traced('storage.set_scanned')
     async def set_scanned(self, key: str):
+        set_span_attributes({'storage.site': self._name, 'storage.key': key})
         await self._redis.hset(f'subscriber:{self._name}:scanned', key, 1)
 
     async def dump(self) -> StorageDump:

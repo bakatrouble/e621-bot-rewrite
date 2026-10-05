@@ -8,12 +8,13 @@ from PIL import Image
 from PIL.Image import Resampling
 from ffmpeg.asyncio import FFmpeg
 
-from utils.tracing import traced
+from utils.tracing import set_span_attributes, traced
 
 
 @traced('media.convert_to_mp4')
 async def convert_to_mp4(media: bytes) -> bytes:
     mime = magic.from_buffer(media, mime=True)
+    set_span_attributes({'media.input_bytes': len(media), 'media.mime': mime})
 
     if mime == 'video/mp4':
         ext = 'mp4'
@@ -43,11 +44,14 @@ async def convert_to_mp4(media: bytes) -> bytes:
         await ffmpeg.execute()
 
         with open(f'{d}/output.mp4', 'rb') as f:
-            return f.read()
+            out = f.read()
+        set_span_attributes({'media.output_bytes': len(out)})
+        return out
 
 
 @traced('media.resize_image')
 async def resize_image(media: bytes) -> bytes:
+    set_span_attributes({'media.input_bytes': len(media)})
     src_im = Image.open(BytesIO(media))
     src_im.load()
 
@@ -58,6 +62,7 @@ async def resize_image(media: bytes) -> bytes:
         im = src_im
 
     width, height = im.size
+    set_span_attributes({'media.width': width, 'media.height': height})
     if width + height > 10000:
         scale = 10000. / (width + height)
         width = int(width * scale)
@@ -78,7 +83,9 @@ async def resize_image(media: bytes) -> bytes:
         else:
             break
 
-    return out.getvalue()
+    result = out.getvalue()
+    set_span_attributes({'media.output_bytes': len(result)})
+    return result
 
 
 async def mp4_has_audio(media: bytes) -> bool:

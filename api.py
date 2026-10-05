@@ -8,7 +8,7 @@ from sanic.exceptions import BadURL
 from sanic_ext import Extend
 
 from context import config, storage as storage_root
-from utils.tracing import instrument_sanic, traced
+from utils.tracing import instrument_sanic, set_span_attributes, traced
 
 
 app = Sanic('subscriber')
@@ -52,7 +52,9 @@ def get_storage(request: Request):
 @traced('api.subscriptions_get')
 async def subscriptions_get(request: Request):
     storage = get_storage(request)
+    set_span_attributes({'api.website': request.args.get('website', 'e621')})
     subs = await storage.get_subs()
+    set_span_attributes({'api.subs.count': len(subs)})
     return json({'status': 'success', 'subscriptions': subs})
 
 
@@ -61,7 +63,9 @@ async def subscriptions_get(request: Request):
 @traced('api.subscriptions_post')
 async def subscriptions_post(request: Request):
     storage = get_storage(request)
+    set_span_attributes({'api.website': request.args.get('website', 'e621')})
     subs: list[str] = request.json.get('subs', [])
+    set_span_attributes({'api.subs.requested': len(subs)})
     if not subs:
         return json({'status': 'error', 'message': 'No subs provided'}, 400)
 
@@ -70,12 +74,14 @@ async def subscriptions_post(request: Request):
     conflicts = [sub for sub in subs if sub in existing_subs]
 
     if conflicts:
+        set_span_attributes({'api.subs.conflicts': len(conflicts)})
         return json({'status': 'error', 'message': 'Some subscriptions already exist', 'conflicts': conflicts}, 409)
 
     for sub in subs:
         await storage.add_sub(sub)
 
     subs.sort()
+    set_span_attributes({'api.subs.added': len(subs)})
     return json({'status': 'ok', 'added': subs})
 
 
@@ -84,19 +90,23 @@ async def subscriptions_post(request: Request):
 @traced('api.subscriptions_delete')
 async def subscriptions_delete(request: Request):
     storage = get_storage(request)
+    set_span_attributes({'api.website': request.args.get('website', 'e621')})
     subs: list[str] = request.json.get('subs', [])
+    set_span_attributes({'api.subs.requested': len(subs)})
 
     existing_subs = set(await storage.get_subs())
     subs = list(map(lambda s: s.lower(), subs))
     missing = [sub for sub in subs if sub not in existing_subs]
 
     if missing:
+        set_span_attributes({'api.subs.missing': len(missing)})
         return json({'status': 'error', 'message': 'Some subscriptions do not exist', 'missing': missing}, 404)
 
     for sub in subs:
         await storage.remove_sub(sub)
 
     subs.sort()
+    set_span_attributes({'api.subs.deleted': len(subs)})
     return json({'status': 'ok', 'deleted': subs})
 
 

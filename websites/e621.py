@@ -11,7 +11,7 @@ from context import storage, config, tag_to_hashtag, bot
 from context.query import Query
 from utils.media import resize_image, convert_to_mp4
 from utils.telegram import send_as_photo, send_as_video, send_as_document
-from utils.tracing import get_tracer, traced
+from utils.tracing import get_tracer, set_span_attributes, traced
 
 logger = logging.getLogger('e621')
 
@@ -58,6 +58,12 @@ class E621Post(BaseModel):
     async def send_post(self, matched_queries: list[Query] | None = None):
         from websites import e621
 
+        set_span_attributes({
+            'e621.post.id': self.id,
+            'e621.file.ext': self.file.ext,
+            'e621.matched_queries.count': len(matched_queries or []),
+        })
+
         if not self.file.url:
             logger.warning(f'file url is missing for post #{self.id}')
             return
@@ -92,13 +98,17 @@ class E621Post(BaseModel):
         logger.info(f'caption: {caption}')
 
         media_bytes = await e621.download_media(self.file.url)
+        set_span_attributes({'e621.media.bytes': len(media_bytes)})
         if self.file.ext in ('jpg', 'png', 'webp'):
             media_bytes = await resize_image(media_bytes)
+            set_span_attributes({'e621.send.via': 'photo', 'e621.sent.bytes': len(media_bytes)})
             await send_as_photo(bot, media_bytes, caption, f'e{self.id}')
         elif self.file.ext in ('gif', 'mp4', 'webm'):
             media_bytes = await convert_to_mp4(media_bytes)
+            set_span_attributes({'e621.send.via': 'video', 'e621.sent.bytes': len(media_bytes)})
             await send_as_video(bot, media_bytes, caption, f'e{self.id}')
         elif self.file.ext in ('swf',):
+            set_span_attributes({'e621.send.via': 'document', 'e621.sent.bytes': len(media_bytes)})
             await send_as_document(bot, media_bytes, caption, f'e{self.id}', self.file.ext)
         else:
             raise RuntimeError(f'unsupported file type: {self.file.ext}')
@@ -145,11 +155,13 @@ class E621:
 
     @traced('e621.get_post')
     async def get_post(self, post_id: int) -> E621Post:
+        set_span_attributes({'e621.post.id': post_id})
         r = await self._client.get(f'/posts/{post_id}.json')
         post = E621Post.model_validate(r.json()['post'])
         if post.file.url is None:
             md5 = post.file.md5
             post.file.url = f'https://static1.e621.net/data/{md5[0:2]}/{md5[2:4]}/{md5}.{post.file.ext}'
+        set_span_attributes({'e621.file.ext': post.file.ext})
         return post
 
     @traced('e621.get_post_versions')
@@ -158,6 +170,12 @@ class E621:
                                 before_id: int | None = None,
                                 post_id: int | None = None,
                                 limit: int = 320) -> list[E621PostVersion]:
+        set_span_attributes({
+            'e621.after_id': after_id or 0,
+            'e621.before_id': before_id or 0,
+            'e621.post.id': post_id or 0,
+            'e621.limit': limit,
+        })
         params = {'limit': str(limit)}
         if before_id is not None:
             params['page'] = f'b{before_id}'
@@ -169,21 +187,28 @@ class E621:
 
         r = await self._client.get(f'/post_versions.json', params=params)
         if '<title>e621 Maintenance</title>' in r.text:
+            set_span_attributes({'e621.maintenance': True})
             return []
         r = r.json()
         if isinstance(r, dict) and r.get('success') is not None:
+            set_span_attributes({'e621.api.success': False})
             return []
 
-        return [E621PostVersion.model_validate(pv) for pv in r]
+        versions = [E621PostVersion.model_validate(pv) for pv in r]
+        set_span_attributes({'e621.versions.count': len(versions)})
+        return versions
 
     @traced('e621.get_posts')
     async def get_posts(self,
                         tags: str = '',
                         page: int = 1,
                         limit: int = 320) -> list[E621Post]:
+        set_span_attributes({'e621.tags': tags, 'e621.page': page, 'e621.limit': limit})
         params = {'tags': tags, 'page': str(page), 'limit': str(limit)}
         r = await self._client.get(f'/posts.json', params=params)
-        return [E621Post.model_validate(p) for p in r.json()]
+        posts = [E621Post.model_validate(p) for p in r.json()]
+        set_span_attributes({'e621.posts.count': len(posts)})
+        return posts
 
     async def get_tag_aliases(self, tag: str) -> list[str]:
         params = {'search[name_matches]': tag}
@@ -195,6 +220,7 @@ class E621:
     @traced('e621.download_media')
     async def download_media(self, url: str) -> bytes:
         r = await self._client.get(url)
+        set_span_attributes({'e621.media.bytes': len(r.content)})
         return r.content
 
     @traced('e621.process_new_posts')
@@ -203,6 +229,7 @@ class E621:
         async with storage.e621.lock:
             logger.info('lock acquired')
             queries = Query.get_queries(await storage.e621.get_subs())
+            set_span_attributes({'e621.subs.count': len(queries)})
             last_post_version = await storage.e621.get_last_post_version()
             page_size = 320
             pvs_to_post: list[E621MatchedPV] = []
@@ -227,6 +254,11 @@ class E621:
             logging.info(f'sent_flags: {sent_flags}')
             pvs_to_post = [plan for plan in pvs_to_post if not sent_flags[plan.post_version.post_id]]
             logger.info(f'unsent posts: {len(pvs_to_post)}')
+            set_span_attributes({
+                'e621.versions.matched': len(sent_flags),
+                'e621.posts.unsent': len(pvs_to_post),
+                'e621.last_post_version': last_post_version,
+            })
 
             if not pvs_to_post:
                 logger.info(f'no unsent posts')
@@ -244,6 +276,7 @@ class E621:
                     logger.error(traceback.format_exception(e))
                 finally:
                     await asyncio.sleep(3)
+            set_span_attributes({'e621.posts.sent': sum(1 for v in sent_flags.values() if v)})
 
     async def worker(self):
         tracer = get_tracer('websites.e621')
@@ -253,5 +286,4 @@ class E621:
                     await self.process_new_posts()
                 except Exception as e:
                     logger.error(traceback.format_exception(e))
-                finally:
-                    await asyncio.sleep(config.interval.total_seconds())
+            await asyncio.sleep(config.interval.total_seconds())

@@ -5,7 +5,7 @@ import traceback
 from pathlib import Path
 
 from context import config
-from utils.tracing import get_tracer, traced
+from utils.tracing import get_tracer, set_span_attributes, traced
 
 
 logger = logging.getLogger('cache')
@@ -30,14 +30,14 @@ async def cache_cleaner():
     while True:
         with tracer.start_as_current_span('cache.cleaner_tick'):
             logger.info(f'running cache cleaner')
-        try:
-            removed = 0
-            for item in config.cache_dir.iterdir():
-                if time.time() - item.stat().st_mtime > 10*24*60*60:
-                    item.unlink()
-                    removed += 1
-            logger.info(f'removed {removed} cached files')
-        except Exception as e:
-            traceback.print_exception(e)
-        finally:
-            await asyncio.sleep(10*60)
+            try:
+                removed = 0
+                for item in config.cache_dir.iterdir():
+                    if time.time() - item.stat().st_mtime > 10*24*60*60:
+                        item.unlink()
+                        removed += 1
+                logger.info(f'removed {removed} cached files')
+                set_span_attributes({'cache.removed': removed})
+            except Exception as e:
+                traceback.print_exception(e)
+        await asyncio.sleep(10*60)

@@ -9,7 +9,7 @@ from bot import telegram_bot
 from context import storage, config
 from context.query import Query
 from utils.cache import cache_cleaner
-from utils.tracing import setup_tracing, traced
+from utils.tracing import setup_tracing, set_span_attributes, traced
 from websites import e621, gelbooru
 
 
@@ -117,34 +117,43 @@ def e621_group():
 @click.argument('subs', nargs=-1, type=str)
 @traced('cli.e621.add')
 async def add(subs: list[str]):
+    set_span_attributes({'cli.subs.requested': len(subs)})
     existing_subs = set(await storage.get_subs())
+    added = 0
     for s in subs:
         s = s.lower()
         if s in existing_subs:
             click.echo(f'`{s}` already exists')
             continue
         await storage.add_sub(s)
+        added += 1
         click.echo(f'`{s}` added')
+    set_span_attributes({'cli.subs.added': added})
 
 
 @e621_group.command('del')
 @click.argument('subs', nargs=-1, type=str)
 @traced('cli.e621.del')
 async def delete(subs: list[str]):
+    set_span_attributes({'cli.subs.requested': len(subs)})
     existing_subs = set(await storage.get_subs())
+    deleted = 0
     for s in subs:
         s = s.lower()
         if s not in existing_subs:
             click.echo(f'`{s}` not found')
             continue
         await storage.remove_sub(s)
+        deleted += 1
         click.echo(f'`{s}` deleted')
+    set_span_attributes({'cli.subs.deleted': deleted})
 
 
 @e621_group.command('test')
 @click.argument('post_id', type=str)
 @traced('cli.e621.test')
 async def e621_test(post_id: str):
+    set_span_attributes({'cli.post.id': post_id})
     post = await e621.get_post(post_id)
     await post.send_post()
 
@@ -153,12 +162,15 @@ async def e621_test(post_id: str):
 @click.argument('post_id', type=str)
 @traced('cli.e621.test-pv')
 async def e621_test_pv(post_id: str):
+    set_span_attributes({'cli.post.id': post_id})
     pv = await e621.get_post_versions(after_id=int(post_id) - 1, limit=1)
     pv = pv[0]
     if matched_queries := pv.check_queries(Query.get_queries(await storage.e621.get_subs())):
+        set_span_attributes({'cli.matched_queries.count': len(matched_queries)})
         post = await e621.get_post(pv.post_id)
         await post.send_post(matched_queries)
     else:
+        set_span_attributes({'cli.matched_queries.count': 0})
         click.echo('No matched queries')
 
 
