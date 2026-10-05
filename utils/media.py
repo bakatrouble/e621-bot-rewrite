@@ -55,7 +55,7 @@ async def resize_image(media: bytes) -> bytes:
     src_im = Image.open(BytesIO(media))
     src_im.load()
 
-    if src_im.mode == 'RGBA':
+    if src_im.mode != 'RGB':
         im = Image.new('RGB', src_im.size, (255, 255, 255))
         im.paste(src_im, mask=src_im.split()[3])
     else:
