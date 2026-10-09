@@ -54,20 +54,7 @@ class E621Post(BaseModel):
                 self.tags.lore +
                 self.tags.meta)
 
-    @traced('e621.send_post')
-    async def send_post(self, matched_queries: list[Query] | None = None):
-        from websites import e621
-
-        set_span_attributes({
-            'e621.post.id': self.id,
-            'e621.file.ext': self.file.ext,
-            'e621.matched_queries.count': len(matched_queries or []),
-        })
-
-        if not self.file.url:
-            logger.warning(f'file url is missing for post #{self.id}')
-            return
-
+    def build_caption(self, matched_queries: list[Query] | None = None):
         caption_lines = []
         if matched_queries is not None:
             matched_tags = set()
@@ -95,6 +82,24 @@ class E621Post(BaseModel):
             f'https://e621.net/posts/{self.id}'
         ]
         caption = '\n'.join(caption_lines)
+        return caption
+
+    @traced('e621.send_post')
+    async def send_post(self, matched_queries: list[Query] | None = None):
+        from websites import e621
+
+        set_span_attributes({
+            'e621.post.id': self.id,
+            'e621.file.ext': self.file.ext,
+            'e621.matched_queries.count': len(matched_queries or []),
+        })
+
+        if not self.file.url:
+            logger.warning(f'file url is missing for post #{self.id}')
+            return
+
+        caption = self.build_caption(matched_queries)
+
         logger.info(f'caption: {caption}')
 
         media_bytes = await e621.download_media(self.file.url)

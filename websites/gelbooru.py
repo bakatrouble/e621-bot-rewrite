@@ -75,15 +75,8 @@ class GelbooruPost(BaseModel):
                     matched_subs.append(sub)
         return matched_subs
 
-    @traced('gelbooru.send_post')
-    async def send_post(self):
+    async def build_caption(self):
         from websites import gelbooru
-
-        set_span_attributes({'gelbooru.post.id': self.id, 'gelbooru.sub': self.sub or ''})
-
-        if not self.file_url:
-            logger.warning(f'file url is missing for post #{self.id}')
-            return
 
         tags = await gelbooru.get_tags(self.tag_list)
 
@@ -119,6 +112,21 @@ class GelbooruPost(BaseModel):
             f'https://gelbooru.com/index.php?page=post&s=view&id={self.id}'
         ]
         caption = '\n'.join(caption_lines)
+
+        return caption
+
+    @traced('gelbooru.send_post')
+    async def send_post(self):
+        from websites import gelbooru
+
+        set_span_attributes({'gelbooru.post.id': self.id, 'gelbooru.sub': self.subs or ''})
+
+        if not self.file_url:
+            logger.warning(f'file url is missing for post #{self.id}')
+            return
+
+        caption = await self.build_caption()
+
         logger.info(f'caption: {caption}')
 
         media_bytes = await gelbooru.download_media(self.file_url)
