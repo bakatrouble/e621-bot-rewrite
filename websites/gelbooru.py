@@ -119,7 +119,7 @@ class GelbooruPost(BaseModel):
     async def send_post(self):
         from websites import gelbooru
 
-        set_span_attributes({'gelbooru.post.id': self.id, 'gelbooru.sub': self.subs or ''})
+        set_span_attributes({'gelbooru.post.id': self.id, 'gelbooru.subs': self.subs or ''})
 
         if not self.file_url:
             logger.warning(f'file url is missing for post #{self.id}')
@@ -304,7 +304,7 @@ class Gelbooru:
                 for post in posts_to_post:
                     with tracer.start_as_current_span('gelbooru.post') as span:
                         span.set_attribute('gelbooru.post.id', post.id)
-                        span.set_attribute('gelbooru.sub', post.sub or '')
+                        span.set_attribute('gelbooru.subs', post.subs or '')
                         try:
                             if not sent_flags[post.id]:
                                 await post.send_post()
