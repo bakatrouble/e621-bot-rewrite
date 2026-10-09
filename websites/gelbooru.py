@@ -48,11 +48,32 @@ class GelbooruPost(BaseModel):
     status: str
     post_locked: int
     has_children: str
-    sub: str | None = None
+    subs: list[str] | None = None
 
     @cached_property
     def tag_list(self):
         return self.tags.split(' ')
+
+    def build_sub(self, subs: list[str]):
+        tags = set(self.tag_list)
+        matched_subs: list[str] = []
+        for sub in subs:
+            if ' ' in sub:
+                sub_parts = sub.split(' ')
+                matched = True
+                for part in sub_parts:
+                    if part.startswith('-'):
+                        if part in tags:
+                            matched = False
+                    else:
+                        if part not in tags:
+                            matched = False
+                if matched:
+                    matched_subs.append(sub)
+            else:
+                if sub in tags:
+                    matched_subs.append(sub)
+        return matched_subs
 
     @traced('gelbooru.send_post')
     async def send_post(self):
@@ -67,10 +88,21 @@ class GelbooruPost(BaseModel):
         tags = await gelbooru.get_tags(self.tag_list)
 
         caption_lines = []
-        if self.sub is not None:
-            matched_tags = [tag.hashtag for tag in tags if tag.name in self.sub]
-            caption_lines.append(f'Matched tags: <b>{' '.join(matched_tags)}</b>')
-            caption_lines.append(f'Subscription: <code>{self.sub}</code>')
+        if self.subs:
+            monitored_tags = set()
+            for sub in self.subs:
+                for tag in sub.split():
+                    if tag.startswith('-'):
+                        tag = f'-{tag_to_hashtag(tag[1:])}'
+                    else:
+                        tag = tag_to_hashtag(tag)
+                    monitored_tags.add(tag)
+            monitored_tags = sorted(list(monitored_tags))
+            caption_lines += [
+                f'Monitored tags: <b>{' '.join(monitored_tags)}</b>',
+                f'Matched queries:',
+                *[f' - <code>{sub}</code>' for sub in self.subs],
+            ]
         artist_tags = list(sorted(tag.hashtag for tag in tags if tag.enum_type == GelbooruTagType.ARTIST))
         character_tags = list(sorted(tag.hashtag for tag in tags if tag.enum_type == GelbooruTagType.CHARACTER))
         copyright_tags = list(sorted(tag.hashtag for tag in tags if tag.enum_type == GelbooruTagType.COPYRIGHT))
@@ -145,7 +177,7 @@ class Gelbooru:
     async def get_posts(self,
                         tags: str = '',
                         page: int = 0,
-                        limit: int = 100):
+                        limit: int = 100) -> list[GelbooruPost]:
         set_span_attributes({'gelbooru.tags': tags, 'gelbooru.page': page, 'gelbooru.limit': limit})
         params = {
             'page': 'dapi',
@@ -230,12 +262,13 @@ class Gelbooru:
                     new_posts = []
                     logging.info(f'fetching posts for `{'`, `'.join(chunk)}`')
                     for page_num in count():
+                        # OR format = `{tag1 ~ tag2}`
                         page = await self.get_posts(tags=f'{{{' ~ '.join(chunk)}}}', page=page_num, limit=page_size)
                         sent_flags = await storage.gelbooru.get_post_sent([p.id for p in page])
                         final_page = False
-                        for post in page:
+                        for post in page:  # type: GelbooruPost
                             if not sent_flags[post.id]:
-                                post.sub = sub
+                                post.subs = post.build_sub(subs)
                                 new_posts.append(post)
                             else:
                                 final_page = True

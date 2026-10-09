@@ -12,7 +12,9 @@ class QueryAtom:
     @classmethod
     def from_string(cls, atom: str):
         negative = atom.startswith('-')
-        return QueryAtom(tag=atom.lstrip('-'), negative=negative)
+        if negative:
+            atom = atom[1:]
+        return QueryAtom(tag=atom, negative=negative)
 
     def __str__(self):
         return f'{'-' if self.negative else ''}{self.tag}'
