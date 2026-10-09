@@ -1,16 +1,16 @@
 import asyncio
 import logging
 import traceback
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Optional, Iterable
 
 import httpx
 from pydantic import BaseModel
 
-from context import storage, config, tag_to_hashtag, bot
+from context import AppContext, tag_to_hashtag
 from context.query import Query
-from utils.media import resize_image, convert_to_mp4
-from utils.telegram import send_as_photo, send_as_video, send_as_document
+from utils.media import convert_to_mp4, resize_image
+from utils.telegram import send_as_document, send_as_photo, send_as_video
 from utils.tracing import get_tracer, record_span_error, set_span_attributes, traced
 
 logger = logging.getLogger('e621')
@@ -22,7 +22,7 @@ class E621PostFile(BaseModel):
     ext: str
     size: int
     md5: str
-    url: Optional[str]
+    url: str | None
 
 
 class E621PostTags(BaseModel):
@@ -45,14 +45,16 @@ class E621Post(BaseModel):
 
     @property
     def flat_tags(self) -> list[str]:
-        return (self.tags.general +
-                self.tags.species +
-                self.tags.character +
-                self.tags.copyright +
-                self.tags.artist +
-                self.tags.invalid +
-                self.tags.lore +
-                self.tags.meta)
+        return (
+            self.tags.general
+            + self.tags.species
+            + self.tags.character
+            + self.tags.copyright
+            + self.tags.artist
+            + self.tags.invalid
+            + self.tags.lore
+            + self.tags.meta
+        )
 
     def build_caption(self, matched_queries: list[Query] | None = None):
         caption_lines = []
@@ -60,39 +62,42 @@ class E621Post(BaseModel):
             matched_tags = set()
             for q in matched_queries:
                 matched_tags |= q.mentioned_tags()
-            monitored_tags = list(sorted([tag_to_hashtag(tag) for tag in self.flat_tags if tag in matched_tags]))
+            monitored_tags = sorted(
+                [tag_to_hashtag(tag) for tag in self.flat_tags if tag in matched_tags]
+            )
             caption_lines += [
-                f'Monitored tags: <b>{' '.join(monitored_tags)}</b>',
-                f'Matched queries:',
+                f'Monitored tags: <b>{" ".join(monitored_tags)}</b>',
+                'Matched queries:',
                 *[f' - <code>{match}</code>' for match in matched_queries],
             ]
-        artist_tags = list(sorted([tag_to_hashtag(tag) for tag in self.tags.artist]))
-        character_tags = list(sorted([tag_to_hashtag(tag) for tag in self.tags.character]))
-        copyright_tags = list(sorted([tag_to_hashtag(tag) for tag in self.tags.copyright]))
+        artist_tags = sorted([tag_to_hashtag(tag) for tag in self.tags.artist])
+        character_tags = sorted([tag_to_hashtag(tag) for tag in self.tags.character])
+        copyright_tags = sorted([tag_to_hashtag(tag) for tag in self.tags.copyright])
         if artist_tags:
-            caption_lines.append(f'Artist: <b>{' '.join(artist_tags)}</b>')
+            caption_lines.append(f'Artist: <b>{" ".join(artist_tags)}</b>')
         if character_tags:
             if len(character_tags) > 15:
                 character_tags = character_tags[:15] + ['...']
-            caption_lines.append(f'Character: <b>{' '.join(character_tags)}</b>')
+            caption_lines.append(f'Character: <b>{" ".join(character_tags)}</b>')
         if copyright_tags:
-            caption_lines.append(f'Copyright: <b>{' '.join(copyright_tags)}</b>')
-        caption_lines += [
-            '',
-            f'https://e621.net/posts/{self.id}'
-        ]
+            caption_lines.append(f'Copyright: <b>{" ".join(copyright_tags)}</b>')
+        caption_lines += ['', f'https://e621.net/posts/{self.id}']
         caption = '\n'.join(caption_lines)
         return caption
 
     @traced('e621.send_post')
-    async def send_post(self, matched_queries: list[Query] | None = None):
-        from websites import e621
+    async def send_post(
+        self, ctx: AppContext, matched_queries: list[Query] | None = None
+    ):
+        e621 = ctx.e621
 
-        set_span_attributes({
-            'e621.post.id': self.id,
-            'e621.file.ext': self.file.ext,
-            'e621.matched_queries.count': len(matched_queries or []),
-        })
+        set_span_attributes(
+            {
+                'e621.post.id': self.id,
+                'e621.file.ext': self.file.ext,
+                'e621.matched_queries.count': len(matched_queries or []),
+            }
+        )
 
         if not self.file.url:
             logger.warning(f'file url is missing for post #{self.id}')
@@ -106,15 +111,23 @@ class E621Post(BaseModel):
         set_span_attributes({'e621.media.bytes': len(media_bytes)})
         if self.file.ext in ('jpg', 'png', 'webp'):
             media_bytes = await resize_image(media_bytes)
-            set_span_attributes({'e621.send.via': 'photo', 'e621.sent.bytes': len(media_bytes)})
-            await send_as_photo(bot, media_bytes, caption, f'e{self.id}')
+            set_span_attributes(
+                {'e621.send.via': 'photo', 'e621.sent.bytes': len(media_bytes)}
+            )
+            await send_as_photo(ctx.bot, media_bytes, caption, f'e{self.id}')
         elif self.file.ext in ('gif', 'mp4', 'webm'):
             media_bytes = await convert_to_mp4(media_bytes)
-            set_span_attributes({'e621.send.via': 'video', 'e621.sent.bytes': len(media_bytes)})
-            await send_as_video(bot, media_bytes, caption, f'e{self.id}')
+            set_span_attributes(
+                {'e621.send.via': 'video', 'e621.sent.bytes': len(media_bytes)}
+            )
+            await send_as_video(ctx.bot, media_bytes, caption, f'e{self.id}')
         elif self.file.ext in ('swf',):
-            set_span_attributes({'e621.send.via': 'document', 'e621.sent.bytes': len(media_bytes)})
-            await send_as_document(bot, media_bytes, caption, f'e{self.id}', self.file.ext)
+            set_span_attributes(
+                {'e621.send.via': 'document', 'e621.sent.bytes': len(media_bytes)}
+            )
+            await send_as_document(
+                ctx.bot, media_bytes, caption, f'e{self.id}', self.file.ext
+            )
         else:
             raise RuntimeError(f'unsupported file type: {self.file.ext}')
 
@@ -147,16 +160,19 @@ class E621MatchedPV:
     matched_queries: list[Query]
     post_version: E621PostVersion
 
-    async def send_post(self):
-        from websites import e621
+    async def send_post(self, ctx: AppContext):
+        e621 = ctx.e621
+
         post = await e621.get_post(self.post_version.post_id)
-        await post.send_post(self.matched_queries)
+        await post.send_post(ctx, self.matched_queries)
 
 
 class E621:
     def __init__(self):
-        self._client = httpx.AsyncClient(base_url='https://e621.net',
-                                         headers={'User-Agent': 'bot/py-3.0 (bakatrouble)'})
+        self._client = httpx.AsyncClient(
+            base_url='https://e621.net',
+            headers={'User-Agent': 'bot/py-3.0 (bakatrouble)'},
+        )
 
     @traced('e621.get_post')
     async def get_post(self, post_id: int) -> E621Post:
@@ -170,17 +186,21 @@ class E621:
         return post
 
     @traced('e621.get_post_versions')
-    async def get_post_versions(self,
-                                after_id: int | None = None,
-                                before_id: int | None = None,
-                                post_id: int | None = None,
-                                limit: int = 320) -> list[E621PostVersion]:
-        set_span_attributes({
-            'e621.after_id': after_id or 0,
-            'e621.before_id': before_id or 0,
-            'e621.post.id': post_id or 0,
-            'e621.limit': limit,
-        })
+    async def get_post_versions(
+        self,
+        after_id: int | None = None,
+        before_id: int | None = None,
+        post_id: int | None = None,
+        limit: int = 320,
+    ) -> list[E621PostVersion]:
+        set_span_attributes(
+            {
+                'e621.after_id': after_id or 0,
+                'e621.before_id': before_id or 0,
+                'e621.post.id': post_id or 0,
+                'e621.limit': limit,
+            }
+        )
         params = {'limit': str(limit)}
         if before_id is not None:
             params['page'] = f'b{before_id}'
@@ -190,7 +210,7 @@ class E621:
         if post_id is not None:
             params['search[post_id]'] = str(post_id)
 
-        r = await self._client.get(f'/post_versions.json', params=params)
+        r = await self._client.get('/post_versions.json', params=params)
         if '<title>e621 Maintenance</title>' in r.text:
             set_span_attributes({'e621.maintenance': True})
             return []
@@ -204,20 +224,19 @@ class E621:
         return versions
 
     @traced('e621.get_posts')
-    async def get_posts(self,
-                        tags: str = '',
-                        page: int = 1,
-                        limit: int = 320) -> list[E621Post]:
+    async def get_posts(
+        self, tags: str = '', page: int = 1, limit: int = 320
+    ) -> list[E621Post]:
         set_span_attributes({'e621.tags': tags, 'e621.page': page, 'e621.limit': limit})
         params = {'tags': tags, 'page': str(page), 'limit': str(limit)}
-        r = await self._client.get(f'/posts.json', params=params)
+        r = await self._client.get('/posts.json', params=params)
         posts = [E621Post.model_validate(p) for p in r.json()]
         set_span_attributes({'e621.posts.count': len(posts)})
         return posts
 
     async def get_tag_aliases(self, tag: str) -> list[str]:
         params = {'search[name_matches]': tag}
-        r = await self._client.get(f'/tag_aliases.json', params=params)
+        r = await self._client.get('/tag_aliases.json', params=params)
         r = r.json()
         tag_aliases = [E621TagAlias.model_validate(ta) for ta in r]
         return [ta.consequent_name for ta in tag_aliases if ta.status == 'active']
@@ -229,8 +248,9 @@ class E621:
         return r.content
 
     @traced('e621.process_new_posts')
-    async def process_new_posts(self):
+    async def process_new_posts(self, ctx: AppContext):
         logger.info('processing new posts')
+        storage = ctx.storage
         async with storage.e621.lock:
             tracer = get_tracer('websites.e621')
             logger.info('lock acquired')
@@ -242,65 +262,85 @@ class E621:
             with tracer.start_as_current_span('e621.fetch_post_versions'):
                 for i in range(10):
                     after_id = last_post_version or None
-                    page = await self.get_post_versions(after_id=after_id, limit=page_size)
+                    page = await self.get_post_versions(
+                        after_id=after_id, limit=page_size
+                    )
 
                     page.reverse()
                     for post_version in page:
-                        if post_version.id > last_post_version:
-                            last_post_version = post_version.id
+                        last_post_version = max(last_post_version, post_version.id)
                         if matched_queries := post_version.check_queries(queries):
-                            pvs_to_post.append(E621MatchedPV(matched_queries, post_version))
+                            pvs_to_post.append(
+                                E621MatchedPV(matched_queries, post_version)
+                            )
 
-                    logger.info(f'page {i} loaded, count={len(page)}, matched={len(pvs_to_post)}')
+                    logger.info(
+                        f'page {i} loaded, count={len(page)}, matched={len(pvs_to_post)}'
+                    )
 
                     if len(page) < page_size:
                         break
 
             pvs_to_post.sort(key=lambda plan: plan.post_version.id)
-            sent_flags = await storage.e621.get_post_sent([plan.post_version.post_id for plan in pvs_to_post])
-            logging.info(f'sent_flags: {sent_flags}')
-            pvs_to_post = [plan for plan in pvs_to_post if not sent_flags[plan.post_version.post_id]]
+            sent_flags = await storage.e621.get_post_sent(
+                [plan.post_version.post_id for plan in pvs_to_post]
+            )
+            logger.info(f'sent_flags: {sent_flags}')
+            pvs_to_post = [
+                plan
+                for plan in pvs_to_post
+                if not sent_flags[plan.post_version.post_id]
+            ]
             logger.info(f'unsent posts: {len(pvs_to_post)}')
-            set_span_attributes({
-                'e621.versions.matched': len(sent_flags),
-                'e621.posts.unsent': len(pvs_to_post),
-                'e621.last_post_version': last_post_version,
-            })
+            set_span_attributes(
+                {
+                    'e621.versions.matched': len(sent_flags),
+                    'e621.posts.unsent': len(pvs_to_post),
+                    'e621.last_post_version': last_post_version,
+                }
+            )
 
             if not pvs_to_post:
-                logger.info(f'no unsent posts')
+                logger.info('no unsent posts')
                 await storage.e621.set_last_post_version(last_post_version)
                 return
 
             with tracer.start_as_current_span('e621.send_posts') as span:
-                span.set_attributes({'e621.posts.count': len(pvs_to_post)})
+                span.set_attribute('e621.posts.count', len(pvs_to_post))
                 for plan in pvs_to_post:
                     post_id = plan.post_version.post_id
                     with tracer.start_as_current_span('e621.post') as span:
                         span.set_attribute('e621.post.id', post_id)
                         span.set_attribute('e621.post_version.id', plan.post_version.id)
-                        span.set_attribute('e621.post.matched_queries', [str(q) for q in plan.matched_queries])
+                        span.set_attribute(
+                            'e621.post.matched_queries',
+                            [str(q) for q in plan.matched_queries],
+                        )
                         try:
                             if not sent_flags[post_id]:
-                                await plan.send_post()
+                                await plan.send_post(ctx)
                                 await storage.e621.set_post_sent(post_id)
                                 sent_flags[post_id] = True
                                 span.set_attribute('e621.post.sent', True)
                             else:
                                 span.set_attribute('e621.post.sent', False)
-                            await storage.e621.set_last_post_version(plan.post_version.id)
-                        except Exception as e:
+                            await storage.e621.set_last_post_version(
+                                plan.post_version.id
+                            )
+                        except Exception as e:  # noqa: BLE001
                             record_span_error(span, e)
                             logger.error(traceback.format_exception(e))
                     await asyncio.sleep(3)
-            set_span_attributes({'e621.posts.sent': sum(1 for v in sent_flags.values() if v)})
+            set_span_attributes(
+                {'e621.posts.sent': sum(1 for v in sent_flags.values() if v)}
+            )
 
-    async def worker(self):
+    async def worker(self, ctx: AppContext):
         tracer = get_tracer('websites.e621')
         while True:
             with tracer.start_as_current_span('e621.worker_tick'):
                 try:
-                    await self.process_new_posts()
-                except Exception as e:
+                    await self.process_new_posts(ctx)
+                except Exception as e:  # noqa: BLE001
                     logger.error(traceback.format_exception(e))
-            await asyncio.sleep(config.interval.total_seconds())
+            await asyncio.sleep(ctx.config.interval.total_seconds())

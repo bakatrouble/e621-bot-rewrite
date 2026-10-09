@@ -1,7 +1,5 @@
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Iterable
-
-from . import storage
 
 
 @dataclass
@@ -17,7 +15,7 @@ class QueryAtom:
         return QueryAtom(tag=atom, negative=negative)
 
     def __str__(self):
-        return f'{'-' if self.negative else ''}{self.tag}'
+        return f'{"-" if self.negative else ""}{self.tag}'
 
 
 class Query:
@@ -28,7 +26,7 @@ class Query:
         return ' '.join(str(atom) for atom in self.atoms)
 
     def mentioned_tags(self):
-        return set(atom.tag for atom in self.atoms if not atom.negative)
+        return {atom.tag for atom in self.atoms if not atom.negative}
 
     @classmethod
     def get_queries(cls, subs: list[str]) -> list['Query']:

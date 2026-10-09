@@ -6,7 +6,6 @@ from redis.asyncio import Redis
 
 from utils.tracing import set_span_attributes, traced
 
-
 __all__ = ['Storage', 'StorageDump', 'migrations']
 
 
@@ -27,7 +26,12 @@ class StorageImpl:
     @traced('storage.get_subs')
     async def get_subs(self) -> list[str]:
         set_span_attributes({'storage.site': self._name})
-        subs = [str(sub) for sub in sorted(await self._redis.smembers(f'subscriber:{self._name}:subs'))]
+        subs = [
+            str(sub)
+            for sub in sorted(
+                await self._redis.smembers(f'subscriber:{self._name}:subs')
+            )
+        ]
         set_span_attributes({'storage.subs.count': len(subs)})
         return subs
 
@@ -43,12 +47,18 @@ class StorageImpl:
 
     @traced('storage.get_post_sent')
     async def get_post_sent(self, post_ids: list[int]) -> dict[int, bool]:
-        set_span_attributes({'storage.site': self._name, 'storage.posts.requested': len(post_ids)})
+        set_span_attributes(
+            {'storage.site': self._name, 'storage.posts.requested': len(post_ids)}
+        )
         if not post_ids:
             return {}
-        flags = {post_id: bool(ismember)
-                 for post_id, ismember
-                 in zip(post_ids, await self._redis.smismember(f'subscriber:{self._name}:sent', post_ids))}
+        flags = {
+            post_id: bool(ismember)
+            for post_id, ismember in zip(
+                post_ids,
+                await self._redis.smismember(f'subscriber:{self._name}:sent', post_ids),
+            )
+        }
         set_span_attributes({'storage.posts.sent': sum(1 for v in flags.values() if v)})
         return flags
 
@@ -60,14 +70,20 @@ class StorageImpl:
     @traced('storage.get_last_post_version')
     async def get_last_post_version(self) -> int:
         set_span_attributes({'storage.site': self._name})
-        version = int(await self._redis.get(f'subscriber:{self._name}:last_post_version') or '0')
+        version = int(
+            await self._redis.get(f'subscriber:{self._name}:last_post_version') or '0'
+        )
         set_span_attributes({'storage.last_post_version': version})
         return version
 
     @traced('storage.set_last_post_version')
     async def set_last_post_version(self, post_version: int):
-        set_span_attributes({'storage.site': self._name, 'storage.last_post_version': post_version})
-        await self._redis.set(f'subscriber:{self._name}:last_post_version', post_version)
+        set_span_attributes(
+            {'storage.site': self._name, 'storage.last_post_version': post_version}
+        )
+        await self._redis.set(
+            f'subscriber:{self._name}:last_post_version', post_version
+        )
 
     @traced('storage.get_scanned')
     async def get_scanned(self, key: str) -> bool:
@@ -81,7 +97,9 @@ class StorageImpl:
 
     async def dump(self) -> StorageDump:
         subs = await self.get_subs()
-        sent = list(map(int, await self._redis.smembers(f'subscriber:{self._name}:sent')))
+        sent = list(
+            map(int, await self._redis.smembers(f'subscriber:{self._name}:sent'))
+        )
         last_post_version = await self.get_last_post_version()
 
         return StorageDump(subs, sent, last_post_version)
@@ -116,6 +134,7 @@ async def migration0_1(redis: Redis, logger: logging.Logger):
     await rename('e621-go:sent', 'subscriber:e621:sent')
     await rename('e621-go:last_post_version', 'subscriber:e621:last_post_version')
     await redis.set('subscriber:version', 1)
+
 
 migrations = [
     migration0_1,

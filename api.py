@@ -3,25 +3,30 @@ from functools import wraps
 
 import hypercorn.asyncio
 from hypercorn import Config
-from sanic import Sanic, Request, json
+from sanic import Config as SanicConfig
+from sanic import Request, Sanic, json
 from sanic.exceptions import BadURL
 from sanic_ext import Extend
 
-from context import config, storage as storage_root
+from context import AppContext
 from utils.tracing import instrument_sanic, set_span_attributes, traced
 
-
-app = Sanic('subscriber')
+app: Sanic = Sanic[SanicConfig, AppContext]('subscriber')
 app.config.CORS_ORIGINS = '*'
 Extend(app)
 instrument_sanic(app)
 
 
-async def start():
+async def start(ctx: AppContext):
+    if not ctx.config.api:
+        raise RuntimeError('API config is not provided')
+
     from utils.tracing import setup_tracing
+
     setup_tracing('e621-bot-api')
+    app.ctx = ctx
     conf = Config()
-    conf.bind = config.api.bind
+    conf.bind = ctx.config.api.bind
     await hypercorn.asyncio.serve(app, conf)
 
 
@@ -29,10 +34,12 @@ def protected():
     def decorator(f):
         @wraps(f)
         async def decorated_function(request: Request, *args, **kwargs):
-            if request.headers.get('x-api-key') not in config.api.keys:
+            if request.headers.get('x-api-key') not in app.ctx.config.api.keys:
                 return json({'status': 'error', 'message': 'Forbidden'}, 403)
             return await f(request, *args, **kwargs)
+
         return decorated_function
+
     return decorator
 
 
@@ -40,9 +47,9 @@ def get_storage(request: Request):
     website = request.args.get('website', 'e621')
     match website:
         case 'e621':
-            return storage_root.e621
+            return app.ctx.storage.e621
         case 'gelbooru':
-            return storage_root.gelbooru
+            return app.ctx.storage.gelbooru
         case _:
             raise BadURL('invalid website')
 
@@ -70,12 +77,19 @@ async def subscriptions_post(request: Request):
         return json({'status': 'error', 'message': 'No subs provided'}, 400)
 
     existing_subs = set(await storage.get_subs())
-    subs = list(map(lambda s: s.lower(), subs))
+    subs = [s.lower() for s in subs]
     conflicts = [sub for sub in subs if sub in existing_subs]
 
     if conflicts:
         set_span_attributes({'api.subs.conflicts': len(conflicts)})
-        return json({'status': 'error', 'message': 'Some subscriptions already exist', 'conflicts': conflicts}, 409)
+        return json(
+            {
+                'status': 'error',
+                'message': 'Some subscriptions already exist',
+                'conflicts': conflicts,
+            },
+            409,
+        )
 
     for sub in subs:
         await storage.add_sub(sub)
@@ -95,12 +109,19 @@ async def subscriptions_delete(request: Request):
     set_span_attributes({'api.subs.requested': len(subs)})
 
     existing_subs = set(await storage.get_subs())
-    subs = list(map(lambda s: s.lower(), subs))
+    subs = [s.lower() for s in subs]
     missing = [sub for sub in subs if sub not in existing_subs]
 
     if missing:
         set_span_attributes({'api.subs.missing': len(missing)})
-        return json({'status': 'error', 'message': 'Some subscriptions do not exist', 'missing': missing}, 404)
+        return json(
+            {
+                'status': 'error',
+                'message': 'Some subscriptions do not exist',
+                'missing': missing,
+            },
+            404,
+        )
 
     for sub in subs:
         await storage.remove_sub(sub)
@@ -111,4 +132,4 @@ async def subscriptions_delete(request: Request):
 
 
 if __name__ == '__main__':
-    asyncio.run(start())
+    asyncio.run(start(AppContext()))

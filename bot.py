@@ -4,12 +4,12 @@ from io import BytesIO
 
 from aiogram import Dispatcher
 from aiogram.filters.callback_data import CallbackData
-from aiogram.types import CallbackQuery, InaccessibleMessage
+from aiogram.types import CallbackQuery, InaccessibleMessage, Message
 from httpx import AsyncClient
 
-from context import bot, config
-from utils.cache import is_cached, cache_file
-from utils.tracing import get_tracer, set_span_attributes, traced
+from context import AppContext
+from utils.cache import cache_file, is_cached
+from utils.tracing import set_span_attributes, traced
 
 
 class SendCallback(CallbackData, prefix='send'):
@@ -23,44 +23,62 @@ class UnsendCallback(CallbackData, prefix='unsend'):
     filename: str
 
 
+def get_destination(ctx: AppContext, callback_data: SendCallback | UnsendCallback):
+    if not ctx.config.destinations:
+        raise RuntimeError('destinations are not configured')
+    if callback_data.destination == 'nsfw':
+        api_base = ctx.config.destinations.nsfw
+    elif callback_data.destination == 'sfw':
+        api_base = ctx.config.destinations.sfw
+    else:
+        raise RuntimeError(f'Destination {callback_data.destination} is not supported')
+
+    return api_base
+
+
 class TelegramBot:
-    def __init__(self):
+    def __init__(self, ctx: AppContext):
         logging.basicConfig(level=logging.INFO)
+        self._ctx = ctx
         self._dispatcher = Dispatcher()
-        self._dispatcher.callback_query.register(self.send_handler, SendCallback.filter())
-        self._dispatcher.callback_query.register(self.unsend_handler, UnsendCallback.filter())
+        self._dispatcher.callback_query.register(
+            self.send_handler, SendCallback.filter()
+        )
+        self._dispatcher.callback_query.register(
+            self.unsend_handler, UnsendCallback.filter()
+        )
 
     async def start(self):
         from utils.tracing import setup_tracing
+
         setup_tracing('e621-bot-telegram')
-        await self._dispatcher.start_polling(bot, handle_signals=False)
+        await self._dispatcher.start_polling(self._ctx.bot, handle_signals=False)
 
     async def stop(self):
         await self._dispatcher.stop_polling()
 
     @traced('telegram.send_handler')
     async def send_handler(self, query: CallbackQuery, callback_data: SendCallback):
-        set_span_attributes({
-            'telegram.destination': callback_data.destination,
-            'telegram.filename': callback_data.filename,
-        })
+        set_span_attributes(
+            {
+                'telegram.destination': callback_data.destination,
+                'telegram.filename': callback_data.filename,
+            }
+        )
         message = query.message
         if isinstance(message, InaccessibleMessage) or not message:
-            logging.warning(f'unable to access message')
+            logging.warning('unable to access message')  # noqa: LOG015
             await query.answer()
             return
 
-        if callback_data.destination == 'nsfw':
-            api_base = config.destinations.nsfw
-        elif callback_data.destination == 'sfw':
-            api_base = config.destinations.sfw
-        else:
-            raise RuntimeError(f'Destination {callback_data.destination} is not supported')
+        api_base = get_destination(self._ctx, callback_data)
 
         cached_name = callback_data.filename
 
         cache_path, exists = is_cached(cached_name)
         if not exists:
+            if not isinstance(query.message, Message):
+                raise RuntimeError('')
             if query.message.photo:
                 file_id = query.message.photo[-1].file_id
             elif query.message.document:
@@ -68,17 +86,19 @@ class TelegramBot:
             elif query.message.video:
                 file_id = query.message.video.file_id
             else:
-                logging.warning(f'no media')
+                logging.warning('no media')  # noqa: LOG015
                 await query.answer()
                 return
 
             out = BytesIO()
-            await bot.download(file_id, out)
+            await self._ctx.bot.download(file_id, out)
             media = out.getvalue()
             cache_path = cache_file(media, cached_name)
 
         async with AsyncClient() as client:
-            r = await client.post(f'{api_base}/internalSend', json={'path': str(cache_path)})
+            r = await client.post(
+                f'{api_base}/internalSend', json={'path': str(cache_path)}
+            )
             r = r.json()
         set_span_attributes({'telegram.result': r['status']})
         if r['status'] == 'ok':
@@ -92,37 +112,38 @@ class TelegramBot:
             kbd = message.reply_markup
             if callback_data.destination == 'nsfw':
                 kbd.inline_keyboard[0][0].text = 'Cancel NSFW'
-                kbd.inline_keyboard[0][0].callback_data = UnsendCallback(destination='nsfw',
-                                                                         upload_id=r['upload_id'],
-                                                                         filename=cached_name).pack()
+                kbd.inline_keyboard[0][0].callback_data = UnsendCallback(
+                    destination='nsfw', upload_id=r['upload_id'], filename=cached_name
+                ).pack()
             elif callback_data.destination == 'sfw':
                 kbd.inline_keyboard[0][1].text = 'Cancel SFW'
-                kbd.inline_keyboard[0][1].callback_data = UnsendCallback(destination='sfw',
-                                                                         upload_id=r['upload_id'],
-                                                                         filename=cached_name).pack()
+                kbd.inline_keyboard[0][1].callback_data = UnsendCallback(
+                    destination='sfw', upload_id=r['upload_id'], filename=cached_name
+                ).pack()
             await message.edit_reply_markup(reply_markup=kbd)
 
     @traced('telegram.unsend_handler')
     async def unsend_handler(self, query: CallbackQuery, callback_data: UnsendCallback):
-        set_span_attributes({
-            'telegram.destination': callback_data.destination,
-            'telegram.filename': callback_data.filename,
-        })
+        set_span_attributes(
+            {
+                'telegram.destination': callback_data.destination,
+                'telegram.filename': callback_data.filename,
+            }
+        )
         message = query.message
         if isinstance(message, InaccessibleMessage) or not message:
-            logging.warning(f'unable to access message')
+            logging.warning('unable to access message')  # noqa: LOG015
             await query.answer()
             return
 
-        if callback_data.destination == 'nsfw':
-            api_base = config.destinations.nsfw
-        elif callback_data.destination == 'sfw':
-            api_base = config.destinations.sfw
-        else:
-            raise RuntimeError(f'Destination {callback_data.destination} is not supported')
+        api_base = get_destination(self._ctx, callback_data)
 
         async with AsyncClient() as client:
-            r = await client.delete(f'{api_base}/internalDelete', json={'upload_id': callback_data.upload_id})
+            r = await client.request(
+                'DELETE',
+                f'{api_base}/internalDelete',
+                json={'upload_id': callback_data.upload_id},
+            )
             r = r.json()
         set_span_attributes({'telegram.result': r['status']})
         if r['status'] == 'ok':
@@ -134,17 +155,16 @@ class TelegramBot:
             kbd = message.reply_markup
             if callback_data.destination == 'nsfw':
                 kbd.inline_keyboard[0][0].text = 'NSFW'
-                kbd.inline_keyboard[0][0].callback_data = SendCallback(destination='nsfw',
-                                                                       filename=callback_data.filename).pack()
+                kbd.inline_keyboard[0][0].callback_data = SendCallback(
+                    destination='nsfw', filename=callback_data.filename
+                ).pack()
             elif callback_data.destination == 'sfw':
                 kbd.inline_keyboard[0][1].text = 'SFW'
-                kbd.inline_keyboard[0][1].callback_data = SendCallback(destination='sfw',
-                                                                       filename=callback_data.filename).pack()
+                kbd.inline_keyboard[0][1].callback_data = SendCallback(
+                    destination='sfw', filename=callback_data.filename
+                ).pack()
             await message.edit_reply_markup(reply_markup=kbd)
 
 
-telegram_bot = TelegramBot()
-
-
 if __name__ == '__main__':
-    asyncio.run(telegram_bot.start())
+    asyncio.run(TelegramBot(AppContext()).start())
