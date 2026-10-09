@@ -20,26 +20,26 @@ async def cli():
 
 @cli.command('telegram-bot')
 async def start_telegram_bot():
-    setup_tracing('e621-bot-telegram')
     ctx = AppContext()
+    setup_tracing('e621-bot-telegram', ctx)
     await TelegramBot(ctx).start()
 
 
 @cli.command('worker')
 async def start_worker():
-    setup_tracing('e621-bot-worker')
     ctx = AppContext()
+    setup_tracing('e621-bot-worker', ctx)
     async with asyncio.TaskGroup() as tg:
         tg.create_task(ctx.e621.worker(ctx))
         if ctx.config.gelbooru:
             tg.create_task(ctx.gelbooru.worker(ctx))
-        tg.create_task(cache_cleaner())
+        tg.create_task(cache_cleaner(ctx))
 
 
 @cli.command('api-server')
 async def start_api_server():
-    setup_tracing('e621-bot-api')
     ctx = AppContext()
+    setup_tracing('e621-bot-api', ctx)
     await api.start(ctx)
 
 
@@ -71,7 +71,8 @@ async def debug_tracing(timeout: float, endpoint: str | None, verbose: bool):
 
     if verbose:
         logging.getLogger('opentelemetry').setLevel(logging.DEBUG)
-    setup_tracing('e621-bot-cli', endpoint=endpoint)
+    ctx = AppContext()
+    setup_tracing('e621-bot-cli', ctx, endpoint=endpoint)
     report = run_tracing_diagnostics(timeout=timeout)
 
     status = report['status']
@@ -134,13 +135,14 @@ async def debug_tracing(timeout: float, endpoint: str | None, verbose: bool):
 
 @cli.group('e621')
 def e621_group():
+    ctx = AppContext()
     # NB: setup lives here and not in the top-level `cli` group on purpose.
     # The tracer provider (and thus service.name) is process-global and first
     # call wins, so initialising it in `cli()` would mislabel worker/api/bot
     # spans. Management commands are short-lived processes of their own, and
     # this callback runs before any `e621` subcommand, which is also what arms
     # AsyncClickInstrumentor in time to wrap the subcommand invocation.
-    setup_tracing('e621-bot-cli')
+    setup_tracing('e621-bot-cli', ctx)
 
 
 @e621_group.command()

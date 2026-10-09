@@ -51,7 +51,7 @@ class TelegramBot:
     async def start(self):
         from utils.tracing import setup_tracing
 
-        setup_tracing('e621-bot-telegram')
+        setup_tracing('e621-bot-telegram', self._ctx)
         await self._dispatcher.start_polling(self._ctx.bot, handle_signals=False)
 
     async def stop(self):
@@ -75,7 +75,7 @@ class TelegramBot:
 
         cached_name = callback_data.filename
 
-        cache_path, exists = is_cached(cached_name)
+        cache_path, exists = is_cached(self._ctx, cached_name)
         if not exists:
             if not isinstance(query.message, Message):
                 raise RuntimeError('')
@@ -93,7 +93,7 @@ class TelegramBot:
             out = BytesIO()
             await self._ctx.bot.download(file_id, out)
             media = out.getvalue()
-            cache_path = cache_file(media, cached_name)
+            cache_path = cache_file(self._ctx, media, cached_name)
 
         async with AsyncClient() as client:
             r = await client.post(

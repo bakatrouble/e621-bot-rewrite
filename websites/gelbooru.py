@@ -139,18 +139,22 @@ class GelbooruPost(BaseModel):
         set_span_attributes(
             {'gelbooru.media.bytes': len(media_bytes), 'gelbooru.file.ext': ext}
         )
-        if ext in ('jpg', 'png', 'webp'):
+        if ext in ('jpg', 'jpeg', 'png', 'webp'):
             media_bytes = await resize_image(media_bytes)
             set_span_attributes(
                 {'gelbooru.send.via': 'photo', 'gelbooru.sent.bytes': len(media_bytes)}
             )
-            await send_as_photo(ctx.bot, media_bytes, caption, f'g{self.id}')
+            await send_as_photo(
+                ctx.bot, ctx.config.chat_id, media_bytes, caption, f'g{self.id}'
+            )
         elif ext in ('gif', 'mp4', 'webm'):
             media_bytes = await convert_to_mp4(media_bytes)
             set_span_attributes(
                 {'gelbooru.send.via': 'video', 'gelbooru.sent.bytes': len(media_bytes)}
             )
-            await send_as_video(ctx.bot, media_bytes, caption, f'g{self.id}')
+            await send_as_video(
+                ctx.bot, ctx.config.chat_id, media_bytes, caption, f'g{self.id}'
+            )
         elif ext in ('swf',):
             set_span_attributes(
                 {
@@ -158,7 +162,9 @@ class GelbooruPost(BaseModel):
                     'gelbooru.sent.bytes': len(media_bytes),
                 }
             )
-            await send_as_document(ctx.bot, media_bytes, caption, f'g{self.id}', ext)
+            await send_as_document(
+                ctx.bot, ctx.config.chat_id, media_bytes, caption, f'g{self.id}', ext
+            )
         else:
             raise RuntimeError(f'unsupported file type: {ext}')
 
@@ -311,6 +317,8 @@ class Gelbooru:
                             tags=f'{{{" ~ ".join(chunk)}}}',
                             page=page_num,
                             limit=page_size,
+                            user_id=ctx.config.gelbooru.user_id,
+                            api_key=ctx.config.gelbooru.api_key,
                         )
                         sent_flags = await storage.gelbooru.get_post_sent(
                             [p.id for p in page]

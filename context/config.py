@@ -4,7 +4,6 @@ from pathlib import Path
 import yaml
 from pydantic import BaseModel, Field
 
-
 __all__ = ['Config']
 
 

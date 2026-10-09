@@ -3,7 +3,6 @@ from functools import wraps
 
 import hypercorn.asyncio
 from hypercorn import Config
-from sanic import Config as SanicConfig
 from sanic import Request, Sanic, json
 from sanic.exceptions import BadURL
 from sanic_ext import Extend
@@ -11,7 +10,7 @@ from sanic_ext import Extend
 from context import AppContext
 from utils.tracing import instrument_sanic, set_span_attributes, traced
 
-app: Sanic = Sanic[SanicConfig, AppContext]('subscriber')
+app: Sanic = Sanic('subscriber')
 app.config.CORS_ORIGINS = '*'
 Extend(app)
 instrument_sanic(app)
@@ -23,8 +22,8 @@ async def start(ctx: AppContext):
 
     from utils.tracing import setup_tracing
 
-    setup_tracing('e621-bot-api')
-    app.ctx = ctx
+    setup_tracing('e621-bot-api', ctx)
+    app.ctx.appctx = ctx
     conf = Config()
     conf.bind = ctx.config.api.bind
     await hypercorn.asyncio.serve(app, conf)
@@ -34,7 +33,7 @@ def protected():
     def decorator(f):
         @wraps(f)
         async def decorated_function(request: Request, *args, **kwargs):
-            if request.headers.get('x-api-key') not in app.ctx.config.api.keys:
+            if request.headers.get('x-api-key') not in app.ctx.appctx.config.api.keys:
                 return json({'status': 'error', 'message': 'Forbidden'}, 403)
             return await f(request, *args, **kwargs)
 
@@ -47,9 +46,9 @@ def get_storage(request: Request):
     website = request.args.get('website', 'e621')
     match website:
         case 'e621':
-            return app.ctx.storage.e621
+            return app.ctx.appctx.storage.e621
         case 'gelbooru':
-            return app.ctx.storage.gelbooru
+            return app.ctx.appctx.storage.gelbooru
         case _:
             raise BadURL('invalid website')
 

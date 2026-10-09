@@ -4,11 +4,13 @@ from io import BytesIO
 from tempfile import TemporaryDirectory
 
 import magic
+from ffmpeg.asyncio import FFmpeg
 from PIL import Image
 from PIL.Image import Resampling
-from ffmpeg.asyncio import FFmpeg
 
 from utils.tracing import set_span_attributes, traced
+
+logger = logging.getLogger('media')
 
 
 @traced('media.convert_to_mp4')
@@ -26,14 +28,15 @@ async def convert_to_mp4(media: bytes) -> bytes:
         raise RuntimeError(f'Unsupported media type: {mime}')
 
     with TemporaryDirectory() as d:
-        with open(f'{d}/input.{ext}', 'wb') as f:
+        with open(f'{d}/input.{ext}', 'wb') as f:  # noqa: ASYNC230
             f.write(media)
             f.close()
 
-        ffmpeg = FFmpeg()\
-            .option('hide_banner')\
-            .option('y')\
-            .input(f'{d}/input.{ext}')\
+        ffmpeg = (
+            FFmpeg()
+            .option('hide_banner')
+            .option('y')
+            .input(f'{d}/input.{ext}')
             .output(
                 f'{d}/output.mp4',
                 {'c:v': 'libx264', 'c:a': 'aac', 'b:a': '128k'},
@@ -41,9 +44,10 @@ async def convert_to_mp4(media: bytes) -> bytes:
                 crf=26,
                 movflags='+faststart',
             )
+        )
         await ffmpeg.execute()
 
-        with open(f'{d}/output.mp4', 'rb') as f:
+        with open(f'{d}/output.mp4', 'rb') as f:  # noqa: ASYNC230
             out = f.read()
         set_span_attributes({'media.output_bytes': len(out)})
         return out
@@ -65,22 +69,22 @@ async def resize_image(media: bytes) -> bytes:
     width, height = im.size
     set_span_attributes({'media.width': width, 'media.height': height})
     if width + height > 10000:
-        scale = 10000. / (width + height)
+        scale = 10000.0 / (width + height)
         width = int(width * scale)
         height = int(height * scale)
         im = im.resize((width, height), Resampling.LANCZOS)
-        logging.info(f'resized image to {width}x{height}')
+        logger.info(f'resized image to {width}x{height}')
 
     out = BytesIO()
     while True:
         im.save(out, format='JPEG', quality=95)
         buf_size = out.tell()
-        if buf_size > 10*1024*1024:
+        if buf_size > 10 * 1024 * 1024:
             out.truncate(0)
-            width = int(width * .95)
-            height = int(height * .95)
+            width = int(width * 0.95)
+            height = int(height * 0.95)
             im = im.resize((width, height), Resampling.LANCZOS)
-            logging.info(f'buf is {buf_size} bytes, resized to {width}x{height}')
+            logger.info(f'buf is {buf_size} bytes, resized to {width}x{height}')
         else:
             break
 
@@ -91,10 +95,11 @@ async def resize_image(media: bytes) -> bytes:
 
 async def mp4_has_audio(media: bytes) -> bool:
     with TemporaryDirectory() as d:
-        with open(f'{d}/input.mp4', 'wb') as f:
+        with open(f'{d}/input.mp4', 'wb') as f:  # noqa: ASYNC230
             f.write(media)
 
-        ffprobe = FFmpeg(executable='ffprobe')\
-            .input(f'{d}/input.mp4', print_format='json', show_streams=None)
+        ffprobe = FFmpeg(executable='ffprobe').input(
+            f'{d}/input.mp4', print_format='json', show_streams=None
+        )
         result = json.loads(await ffprobe.execute())
         return any(stream['codec_type'] == 'audio' for stream in result['streams'])

@@ -114,19 +114,28 @@ class E621Post(BaseModel):
             set_span_attributes(
                 {'e621.send.via': 'photo', 'e621.sent.bytes': len(media_bytes)}
             )
-            await send_as_photo(ctx.bot, media_bytes, caption, f'e{self.id}')
+            await send_as_photo(
+                ctx.bot, ctx.config.chat_id, media_bytes, caption, f'e{self.id}'
+            )
         elif self.file.ext in ('gif', 'mp4', 'webm'):
             media_bytes = await convert_to_mp4(media_bytes)
             set_span_attributes(
                 {'e621.send.via': 'video', 'e621.sent.bytes': len(media_bytes)}
             )
-            await send_as_video(ctx.bot, media_bytes, caption, f'e{self.id}')
+            await send_as_video(
+                ctx.bot, ctx.config.chat_id, media_bytes, caption, f'e{self.id}'
+            )
         elif self.file.ext in ('swf',):
             set_span_attributes(
                 {'e621.send.via': 'document', 'e621.sent.bytes': len(media_bytes)}
             )
             await send_as_document(
-                ctx.bot, media_bytes, caption, f'e{self.id}', self.file.ext
+                ctx.bot,
+                ctx.config.chat_id,
+                media_bytes,
+                caption,
+                f'e{self.id}',
+                self.file.ext,
             )
         else:
             raise RuntimeError(f'unsupported file type: {self.file.ext}')

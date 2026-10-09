@@ -37,6 +37,8 @@ from collections.abc import Awaitable, Callable, Sequence
 from typing import TYPE_CHECKING, ParamSpec, TypeVar, cast
 from urllib.parse import urlparse, urlunparse
 
+from context import AppContext
+
 if TYPE_CHECKING:
     # Annotations only, so `import utils.tracing` keeps working when
     # OpenTelemetry is not installed (see the lazy imports below).
@@ -126,6 +128,7 @@ def _split_host_port(endpoint: str) -> tuple[str, str, int]:
 
 def setup_tracing(
     service_name: str,
+    ctx: AppContext,
     endpoint: str | None = None,
     environment: str | None = None,
     sample_ratio: float | None = None,
@@ -166,7 +169,7 @@ def setup_tracing(
     cfg_ratio = None
     cfg_enabled = None
     try:
-        from context import config as app_config
+        app_config = ctx.config
 
         tracing_cfg = getattr(app_config, 'tracing', None)
         if tracing_cfg is not None:
